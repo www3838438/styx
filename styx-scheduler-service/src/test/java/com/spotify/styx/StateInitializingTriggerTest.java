@@ -31,6 +31,7 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableMap;
@@ -90,6 +91,16 @@ public class StateInitializingTriggerTest {
 
     assertThat(state.state(), is(RunState.State.QUEUED));
     assertThat(state.data().triggerId(), hasValue("trig"));
+  }
+
+  @Test
+  public void shouldPersistTriggeredWorkflowInstance() throws Exception {
+    DataEndpoint endpoint = dataEndpoint(HOURS);
+    Workflow workflow = Workflow.create("id", TestData.WORKFLOW_URI, endpoint);
+    setDockerImage(workflow.id(), workflow.schedule());
+    trigger.event(workflow, "trig", TIME);
+
+    verify(storage).store(WorkflowInstance.create(workflow.id(), "2016-01-18T09"));
   }
 
   @Test
