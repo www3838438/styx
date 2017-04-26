@@ -21,6 +21,9 @@
 package com.spotify.styx.cli;
 
 import com.spotify.apollo.Client;
+import com.spotify.apollo.Response;
+import com.spotify.apollo.Status;
+import com.spotify.apollo.StatusType;
 import com.spotify.apollo.core.Service;
 import com.spotify.apollo.core.Services;
 import com.spotify.apollo.environment.ApolloEnvironmentModule;
@@ -38,6 +41,11 @@ import com.spotify.styx.model.Workflow;
 import com.spotify.styx.model.WorkflowState;
 import com.spotify.styx.model.data.EventInfo;
 import com.spotify.styx.util.ParameterUtil;
+import com.squareup.okhttp.Callback;
+import com.squareup.okhttp.Headers;
+import com.squareup.okhttp.MediaType;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.RequestBody;
 import java.io.IOException;
 import java.time.format.DateTimeParseException;
 import java.util.Collections;
@@ -47,6 +55,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import javaslang.Tuple;
 import javaslang.Tuple2;
 import net.sourceforge.argparse4j.ArgumentParsers;
@@ -59,6 +68,7 @@ import net.sourceforge.argparse4j.inf.Namespace;
 import net.sourceforge.argparse4j.inf.Subparser;
 import net.sourceforge.argparse4j.inf.Subparsers;
 import net.sourceforge.argparse4j.internal.HelpScreenException;
+import okio.ByteString;
 
 public final class Main {
 
@@ -140,9 +150,14 @@ public final class Main {
   private void run() {
     final Command command = namespace.get(COMMAND_DEST);
 
-    try (Service.Instance instance = cliService.start()) {
-      final Client client = ApolloEnvironmentModule.environment(instance).environment().client();
-      styxClient = StyxClientFactory.create(client, apiHost);
+    final OkHttpClient httpClient = new OkHttpClient();
+
+    httpClient.setConnectTimeout(2, TimeUnit.SECONDS);
+    httpClient.setReadTimeout(90, TimeUnit.SECONDS);
+    httpClient.setWriteTimeout(90, TimeUnit.SECONDS);
+
+    try {
+      styxClient = StyxClientFactory.create(getClient(httpClient), apiHost);
 
       switch (command) {
         case LIST:
@@ -243,10 +258,69 @@ public final class Main {
         cause.printStackTrace();
       }
       System.exit(EXIT_CODE_CLIENT_ERROR);
-    } catch (InterruptedException | IOException e) {
+    } catch (InterruptedException e) {
       e.printStackTrace();
       System.exit(EXIT_CODE_UNKNOWN_ERROR);
     }
+  }
+
+  private Client getClient(OkHttpClient httpClient) {
+    return apolloRequest -> {
+      final MediaType contentType =
+          MediaType.parse(com.google.common.net.MediaType.JSON_UTF_8.toString());
+      final RequestBody body =
+          RequestBody.create(contentType, apolloRequest.payload().orElse(ByteString.EMPTY));
+
+      final com.squareup.okhttp.Request.Builder request = new com.squareup.okhttp.Request.Builder();
+
+      request.url(apolloRequest.uri());
+      request.headers(Headers.of(apolloRequest.headers()));
+
+      switch (apolloRequest.method().toLowerCase()) {
+        case "delete":
+          if (apolloRequest.payload().isPresent()) {
+            request.delete(body);
+          } else {
+            request.delete();
+          }
+          break;
+        case "get":
+          request.get();
+          break;
+        case "head":
+          request.head();
+          break;
+        case "patch":
+          request.patch(body);
+          break;
+        case "post":
+          request.post(body);
+          break;
+        case "put":
+          request.put(body);
+          break;
+        default:
+          throw new RuntimeException("unknown method called");
+      }
+
+      final CompletableFuture<Response<ByteString>> future = new CompletableFuture<>();
+
+      httpClient.newCall(request.build()).enqueue(new Callback() {
+        @Override
+        public void onFailure(com.squareup.okhttp.Request request, IOException e) {
+          future.completeExceptionally(e);
+        }
+
+        @Override
+        public void onResponse(com.squareup.okhttp.Response response) throws IOException {
+          final StatusType status = Status.createForCode(response.code())
+              .withReasonPhrase(response.message());
+          future.complete(Response.of(status, ByteString.of(response.body().bytes())));
+        }
+      });
+
+      return future;
+    };
   }
 
   private void backfillCreate() throws ExecutionException, InterruptedException {
