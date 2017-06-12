@@ -7,9 +7,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,6 +36,7 @@ import com.spotify.styx.api.BackfillPayload;
 import com.spotify.styx.api.BackfillsPayload;
 import com.spotify.styx.api.ResourcesPayload;
 import com.spotify.styx.api.RunStateDataPayload;
+import com.spotify.styx.client.auth.GoogleIdTokenAuth;
 import com.spotify.styx.model.Backfill;
 import com.spotify.styx.model.BackfillInput;
 import com.spotify.styx.model.Event;
@@ -50,6 +51,7 @@ import com.squareup.okhttp.HttpUrl;
 import com.squareup.okhttp.HttpUrl.Builder;
 import java.io.IOException;
 import java.net.URI;
+import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -343,8 +345,18 @@ class StyxApolloClient implements StyxClient {
     });
   }
 
+  private Request decorateRequest(final Request request) {
+    try {
+      return request
+          .withHeader("User-Agent", STYX_CLIENT_VERSION)
+          .withHeader("Authorization", "Bearer " + new GoogleIdTokenAuth().getToken());
+    } catch (IOException | GeneralSecurityException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   private CompletionStage<Response<ByteString>> executeRequest(final Request request) {
-    return client.send(request.withTtl(TTL).withHeader("User-Agent", STYX_CLIENT_VERSION)).thenApply(response -> {
+    return client.send(decorateRequest(request).withTtl(TTL)).thenApply(response -> {
       switch (response.status().family()) {
         case SUCCESSFUL:
           return response;
