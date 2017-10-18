@@ -53,6 +53,16 @@ public class QueuedEventConsumerTest {
   }
 
   @Test
+  public void shouldSkipEventIfExceptionFromEventInterceptor() throws Exception {
+    QueuedEventConsumer eventConsumer =
+        new QueuedEventConsumer(new ExceptionalInterceptor());
+
+    eventConsumer.processedEvent(firstEvent);
+    assertThat(trackedEvents.size(), is(0));
+    assertThat(eventConsumer.queueSize(), is(0));
+  }
+
+  @Test
   public void shouldConsumeMoreEvents() throws Exception {
     eventConsumer.processedEvent(firstEvent);
     eventConsumer.processedEvent(secondEvent);
@@ -95,6 +105,13 @@ public class QueuedEventConsumerTest {
         e.printStackTrace();
       }
       trackedEvents.add(sequenceEvent);
+    }
+  }
+
+  private class ExceptionalInterceptor implements EventInterceptor {
+    @Override
+    public void interceptedEvent(SequenceEvent sequenceEvent) {
+      throw new RuntimeException("Error");
     }
   }
 }
