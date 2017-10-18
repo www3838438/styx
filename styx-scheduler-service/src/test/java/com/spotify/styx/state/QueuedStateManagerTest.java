@@ -40,7 +40,6 @@ import com.spotify.styx.model.WorkflowInstance;
 import com.spotify.styx.storage.InMemStorage;
 import com.spotify.styx.testdata.TestData;
 import java.time.Instant;
-import java.util.Collections;
 import java.util.Optional;
 import java.util.SortedSet;
 import java.util.Stack;

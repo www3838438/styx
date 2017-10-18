@@ -313,7 +313,7 @@ public class QueuedStateManager implements StateManager {
   private void consumeEvent(SequenceEvent sequenceEvent) throws IOException {
     try {
       eventConsumer.processedEvent(sequenceEvent);
-    } catch (QueuedEventConsumer.IsClosed isClosed) {
+    } catch (EventConsumer.IsClosed isClosed) {
       LOG.warn("Event consumer was closed while processing {}", sequenceEvent);
     }
   }
