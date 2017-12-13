@@ -22,6 +22,7 @@ package com.spotify.styx.api;
 
 import static com.spotify.apollo.Status.BAD_REQUEST;
 import static com.spotify.apollo.Status.INTERNAL_SERVER_ERROR;
+import static com.spotify.apollo.Status.NOT_ACCEPTABLE;
 import static com.spotify.apollo.Status.OK;
 import static com.spotify.styx.util.ParameterUtil.parseAlignedInstant;
 
@@ -187,10 +188,16 @@ public class SchedulerResource {
 
   private Response<Event> injectEvent(Event event) {
     if ("dequeue".equals(EventUtil.name(event))) {
+      // For backwards compatibility
       return Response.forStatus(eventInjectorHelper(
           Event.retryAfter(event.workflowInstance(), 0L))).withPayload(event);
+    } else if ("halt".equals(EventUtil.name(event))) {
+      // For backwards compatibility
+      return Response.forStatus(eventInjectorHelper(event));
     } else {
-      return Response.forStatus(eventInjectorHelper(event)).withPayload(event);
+      return Response.forStatus(NOT_ACCEPTABLE.withReasonPhrase(
+          "This API for injecting generic events is deprecated, refer to the specific API for the "
+          + "event you want to send to the scheduler"));
     }
   }
 
