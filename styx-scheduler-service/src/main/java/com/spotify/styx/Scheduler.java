@@ -32,11 +32,13 @@ import static java.util.stream.Collectors.toSet;
 import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.RateLimiter;
 import com.spotify.styx.model.Event;
 import com.spotify.styx.model.Resource;
+import com.spotify.styx.model.StyxConfig;
 import com.spotify.styx.model.Workflow;
 import com.spotify.styx.model.WorkflowId;
 import com.spotify.styx.model.WorkflowInstance;
@@ -48,6 +50,7 @@ import com.spotify.styx.state.StateManager;
 import com.spotify.styx.state.TimeoutConfig;
 import com.spotify.styx.storage.Storage;
 import com.spotify.styx.util.Time;
+import io.reactivex.Flowable;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
@@ -90,11 +93,13 @@ public class Scheduler {
   private final WorkflowResourceDecorator resourceDecorator;
   private final Stats stats;
   private final RateLimiter dequeueRateLimiter;
+  private final Flowable<StyxConfig> config;
 
   public Scheduler(Time time, TimeoutConfig ttls, StateManager stateManager,
       WorkflowCache workflowCache, Storage storage,
       WorkflowResourceDecorator resourceDecorator,
-      Stats stats, RateLimiter dequeueRateLimiter) {
+      Stats stats, RateLimiter dequeueRateLimiter,
+      Flowable<StyxConfig> config) {
     this.time = Objects.requireNonNull(time);
     this.ttls = Objects.requireNonNull(ttls);
     this.stateManager = Objects.requireNonNull(stateManager);
@@ -103,6 +108,7 @@ public class Scheduler {
     this.resourceDecorator = Objects.requireNonNull(resourceDecorator);
     this.stats = Objects.requireNonNull(stats);
     this.dequeueRateLimiter = Objects.requireNonNull(dequeueRateLimiter, "dequeueRateLimiter");
+    this.config = Objects.requireNonNull(config, "config");
   }
 
   void tick() {
@@ -110,7 +116,7 @@ public class Scheduler {
     final Optional<Long> globalConcurrency;
     try {
       resources = storage.resources().stream().collect(toMap(Resource::id, identity()));
-      globalConcurrency = storage.config().globalConcurrency();
+      globalConcurrency = Iterables.getLast(config.blockingLatest()).globalConcurrency();
     } catch (IOException e) {
       LOG.warn("Failed to get resource limits", e);
       return;

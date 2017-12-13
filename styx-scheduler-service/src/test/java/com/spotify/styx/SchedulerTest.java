@@ -57,6 +57,7 @@ import com.spotify.styx.state.TimeoutConfig;
 import com.spotify.styx.storage.Storage;
 import com.spotify.styx.util.IsClosedException;
 import com.spotify.styx.util.Time;
+import io.reactivex.Flowable;
 import java.io.IOException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -118,7 +119,10 @@ public class SchedulerTest {
     storage = mock(Storage.class);
     when(storage.resources()).thenReturn(resourceLimits);
     when(config.globalConcurrency()).thenReturn(Optional.empty());
-    when(storage.config()).thenReturn(config);
+
+    final Flowable<StyxConfig> styxConfig = Flowable.just(config);
+
+    System.out.println(styxConfig.blockingLatest().iterator().hasNext());
 
     when(resourceDecorator.decorateResources(
         any(RunState.class), any(WorkflowConfiguration.class), anySetOf(String.class)))
@@ -126,7 +130,7 @@ public class SchedulerTest {
 
     stateManager = Mockito.spy(new SyncStateManager());
     scheduler = new Scheduler(time, timeoutConfig, stateManager, workflowCache, storage, resourceDecorator,
-                              stats, rateLimiter);
+                              stats, rateLimiter, styxConfig);
   }
 
   private void setResourceLimit(String resourceId, long limit) {

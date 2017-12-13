@@ -90,6 +90,8 @@ import com.typesafe.config.Config;
 import io.fabric8.kubernetes.client.ConfigBuilder;
 import io.fabric8.kubernetes.client.DefaultKubernetesClient;
 import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
+import io.reactivex.Flowable;
+import io.reactivex.schedulers.Schedulers;
 import java.io.Closeable;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -115,6 +117,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class StyxScheduler implements AppInit {
+
+  private static final Logger logger = LoggerFactory.getLogger(StyxScheduler.class);
 
   public static final String SERVICE_NAME = "styx-scheduler";
 
@@ -318,9 +322,14 @@ public class StyxScheduler implements AppInit {
     final Config staleStateTtlConfig = config.getConfig(STYX_STALE_STATE_TTL_CONFIG);
     final TimeoutConfig timeoutConfig = TimeoutConfig.createFromConfig(staleStateTtlConfig);
 
-    final Supplier<StyxConfig> styxConfig = new CachedSupplier<>(storage::config, time);
-    final Supplier<String> dockerId = () -> styxConfig.get().globalDockerRunnerId();
-    final Debug debug = () -> styxConfig.get().debugEnabled();
+    final Flowable<StyxConfig> styxConfig = Flowable.interval(30, SECONDS, Schedulers.io())
+        .onBackpressureLatest()
+        .map(tick -> storage.config())
+        .doOnError(err -> logger.error("Failed to fetch styx runtime configuration", err))
+        .retry();
+
+    final Supplier<String> dockerId = () -> styxConfig.blockingLast().globalDockerRunnerId();
+    final Debug debug = () -> styxConfig.blockingLast().debugEnabled();
     final DockerRunner routingDockerRunner = DockerRunner.routing(
         id -> dockerRunnerFactory.create(id, environment, stateManager, executor, stats, debug),
         dockerId);
@@ -355,7 +364,8 @@ public class StyxScheduler implements AppInit {
         workflowChanged(workflowCache, workflowInitializer, stats, stateManager, workflowConsumer);
 
     final Scheduler scheduler = new Scheduler(time, timeoutConfig, stateManager, workflowCache,
-                                              storage, resourceDecorator, stats, dequeueRateLimiter);
+                                              storage, resourceDecorator, stats, dequeueRateLimiter,
+                                              styxConfig);
 
     final Cleaner cleaner = new Cleaner(dockerRunner);
 
@@ -485,19 +495,15 @@ public class StyxScheduler implements AppInit {
         TimeUnit.SECONDS);
   }
 
-  private static void startRuntimeConfigUpdate(Supplier<StyxConfig> config, ScheduledExecutorService exec,
+  private static void startRuntimeConfigUpdate(Flowable<StyxConfig> config, ScheduledExecutorService exec,
       RateLimiter submissionRateLimiter) {
-    exec.scheduleAtFixedRate(
-        guard(() -> updateRuntimeConfig(config, submissionRateLimiter)),
-        0,
-        RUNTIME_CONFIG_UPDATE_INTERVAL_SECONDS,
-        TimeUnit.SECONDS);
+    config.subscribe(c -> updateRuntimeConfig(c, submissionRateLimiter));
   }
 
-  private static void updateRuntimeConfig(Supplier<StyxConfig> config, RateLimiter rateLimiter) {
+  private static void updateRuntimeConfig(StyxConfig config, RateLimiter rateLimiter) {
     try {
       double currentRate = rateLimiter.getRate();
-      Double updatedRate = config.get().submissionRateLimit().orElse(
+      Double updatedRate = config.submissionRateLimit().orElse(
           StyxScheduler.DEFAULT_SUBMISSION_RATE_PER_SEC);
       if (Math.abs(updatedRate - currentRate) >= 0.1) {
         LOG.info("Updating submission rate limit: {} -> {}", currentRate, updatedRate);
