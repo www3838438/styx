@@ -21,12 +21,10 @@
 package com.spotify.styx.docker;
 
 import static com.spotify.styx.docker.KubernetesPodEventTranslator.translate;
-import static java.util.Collections.emptyList;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
 import static org.junit.Assert.assertThat;
 
-import com.google.common.collect.Lists;
 import com.spotify.styx.docker.KubernetesDockerRunner.KubernetesSecretSpec;
 import com.spotify.styx.model.Event;
 import com.spotify.styx.model.WorkflowInstance;
@@ -327,7 +325,9 @@ public class KubernetesPodEventTranslatorTest {
   }
 
   static PodStatus podStatusNoContainer(String phase) {
-    return new PodStatus(emptyList(), Lists.newArrayList(), "", "", phase, "", "", "");
+    final PodStatus podStatus = new PodStatus();
+    podStatus.setPhase(phase);
+    return podStatus;
   }
 
   private Pod podWithTerminationLogging() {

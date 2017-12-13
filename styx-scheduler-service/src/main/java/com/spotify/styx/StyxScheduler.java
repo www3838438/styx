@@ -644,7 +644,7 @@ public class StyxScheduler implements AppInit {
     }
   }
 
-  private static Container createGkeClient() {
+  public static Container createGkeClient() {
     try {
       final HttpTransport httpTransport = GoogleNetHttpTransport.newTrustedTransport();
       final JsonFactory jsonFactory = Utils.getDefaultJsonFactory();
