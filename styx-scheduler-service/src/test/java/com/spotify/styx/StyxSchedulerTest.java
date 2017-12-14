@@ -35,6 +35,7 @@ import com.spotify.styx.StyxScheduler.KubernetesClientFactory;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
+import io.kubernetes.client.apis.CoreV1Api;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -95,7 +96,7 @@ public class StyxSchedulerTest {
 
     when(gkeClusterGet.execute()).thenReturn(gkeCluster);
 
-    final NamespacedKubernetesClient client =
+    final CoreV1Api client =
         StyxScheduler.getKubernetesClient(config, "foo", gkeClient, kubernetesClientFactory);
     assertThat(client, is(theInstance(kubernetesClient)));
 

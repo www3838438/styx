@@ -1,13 +1,19 @@
 package com.spotify.styx;
 
+import com.google.common.reflect.TypeToken;
 import io.kubernetes.client.ApiClient;
 import io.kubernetes.client.ApiException;
-import io.kubernetes.client.Configuration;
 import io.kubernetes.client.apis.CoreV1Api;
-import io.kubernetes.client.auth.ApiKeyAuth;
+import io.kubernetes.client.models.V1Container;
+import io.kubernetes.client.models.V1ObjectMeta;
+import io.kubernetes.client.models.V1Pod;
+import io.kubernetes.client.models.V1PodSpec;
 import io.kubernetes.client.util.Config;
 import io.kubernetes.client.util.KubeConfig;
+import io.kubernetes.client.util.Watch;
+import io.kubernetes.client.util.authenticators.GCPAuthenticator;
 import java.io.IOException;
+import java.util.Arrays;
 import org.junit.Test;
 
 public class Sandbox {
@@ -15,42 +21,77 @@ public class Sandbox {
   @Test
   public void testFoo() {
     try {
-      // .withMasterUrl("https://" + cluster.getEndpoint())
-      // .withCaCertData(cluster.getMasterAuth().getClusterCaCertificate())
-      // .withClientCertData(cluster.getMasterAuth().getClientCertificate())
-      // .withClientKeyData(cluster.getMasterAuth().getClientKey())
-      // .withNamespace(config.getString(GKE_CLUSTER_NAMESPACE))
-      final KubeConfig config = KubeConfig.loadDefaultKubeConfig();
-      final String rsa = String.format("%s %s %s %s %s %s %s %s",
-                                       config.getClientCertificateData(),
-                                       config.getClientCertificateFile(),
-                                       config.getClientKeyData(),
-                                       config.getClientKeyFile(),
-                                       "RSA", "",
-                                       null, null);
-      System.out.println("rsa = " + rsa);
-
-      ApiClient defaultClient = Configuration.getDefaultApiClient();
-
-      // Configure API key authorization: BearerToken
-      ApiKeyAuth bearerToken = (ApiKeyAuth) defaultClient.getAuthentication("BearerToken");
-      bearerToken.setApiKey("YOUR API KEY");
-      // Uncomment the following line to set a prefix for the API key, e.g. "Token" (defaults to null)
-      //BearerToken.setApiKeyPrefix("Token");
+      KubeConfig.registerAuthenticator(new GCPAuthenticator());
 
       final ApiClient client = Config.defaultClient();
-      // Configuration.setDefaultApiClient(client);
       final CoreV1Api api = new CoreV1Api(client);
-      // final V1Pod pod = new V1Pod().spec(new V1PodSpec());
+
       api.listNode("true", null, null, null, null, null, null, null, null)
           .getItems()
-          .forEach(node -> System.out.println("node = " + node));
+          .forEach(node -> System.out.println("node = " + node.getMetadata().getName()));
+
       api.listNamespace("true", null, null, null, null, null, null, null, null)
           .getItems()
-          .forEach(namespace -> System.out.println("namespace = " + namespace));
-      //api.createNamespacedPod("default", pod, null);
-    } catch (IOException | ApiException e) {
+          .forEach(namespace -> System.out.println("namespace = " + namespace.getMetadata().getName()));
+
+      api.listNamespacedPod("default", null, null, null, null, null, null, null, null, null)
+          .getItems()
+          .forEach(pod -> System.out.println("pod = " + pod.getMetadata().getName()));
+
+      final Thread watcherThread = new Thread(
+          () -> {
+            System.out.println("starting watcher");
+            final Watch<V1Pod> watch;
+            try {
+              watch = Watch.createWatch(client,
+                                        api.listNamespacedPodCall("default", null,
+                                                                  null, null, null,
+                                                                  null, null, null,
+                                                                  null, true, null,
+                                                                  null),
+                                        new TypeToken<Watch.Response<V1Pod>>() {
+                                                           }.getType());
+            } catch (ApiException e) {
+              throw new RuntimeException(e);
+            }
+            for (Watch.Response<V1Pod> item : watch) {
+              System.out.println("item.type = " + item.type);
+              System.out.println(
+                  "item.object.getMetadata().getName() = " + item.object.getMetadata().getName());
+            }
+          });
+
+      watcherThread.start();
+
+      watcherThread.join();
+
+      // createPod(api);
+
+    } catch (IOException | ApiException | InterruptedException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  private void createPod(CoreV1Api api) throws ApiException {
+    final V1Pod pod = new V1Pod()
+        .apiVersion("v1")
+        .kind("Pod")
+        .spec(new V1PodSpec()
+                  .restartPolicy("Never")
+                  .containers(Arrays.asList(new V1Container()
+                                                .name("jockecontainer")
+                                                .command(Arrays.asList("echo"))
+                                                .args(Arrays.asList("hello", "world"))
+                                                .image("busybox:latest"))))
+        .metadata(new V1ObjectMeta()
+                      .clusterName("styx-regional")
+                      .namespace("default")
+                      .name("jocketest" + System.currentTimeMillis()));
+
+    System.out.println("pod = " + pod);
+
+    final V1Pod createdPod = api.createNamespacedPod("default", pod, null);
+
+    System.out.println("createdPod = " + createdPod);
   }
 }

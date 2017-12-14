@@ -39,7 +39,11 @@ import io.fabric8.kubernetes.api.model.ContainerStatus;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodStatus;
 import io.fabric8.kubernetes.client.Watcher;
-import io.fabric8.kubernetes.client.Watcher.Action;
+import io.kubernetes.client.models.V1ContainerStateTerminated;
+import io.kubernetes.client.models.V1ContainerStateWaiting;
+import io.kubernetes.client.models.V1ContainerStatus;
+import io.kubernetes.client.models.V1Pod;
+import io.kubernetes.client.models.V1PodStatus;
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
@@ -52,7 +56,7 @@ public final class KubernetesPodEventTranslator {
   private KubernetesPodEventTranslator() {
   }
 
-  private static final Predicate<ContainerStatus> IS_STYX_CONTAINER =
+  private static final Predicate<V1ContainerStatus> IS_STYX_CONTAINER =
       (cs) -> KubernetesDockerRunner.STYX_RUN.equals(cs.getName());
 
   @JsonIgnoreProperties(ignoreUnknown = true)
@@ -68,10 +72,10 @@ public final class KubernetesPodEventTranslator {
   }
 
   private static Optional<Integer> getExitCodeIfValid(String workflowInstance,
-                                                      Pod pod,
-                                                      ContainerStatus status,
+                                                      V1Pod pod,
+                                                      V1ContainerStatus status,
                                                       Stats stats) {
-    final ContainerStateTerminated terminated = status.getState().getTerminated();
+    final V1ContainerStateTerminated terminated = status.getState().getTerminated();
 
     // Check termination log exit code, if available
     if ("true".equals(pod.getMetadata().getAnnotations().get(DOCKER_TERMINATION_LOGGING_ANNOTATION))) {
@@ -136,11 +140,11 @@ public final class KubernetesPodEventTranslator {
   static List<Event> translate(
       WorkflowInstance workflowInstance,
       RunState state,
-      Action action,
-      Pod pod,
+      String action,
+      V1Pod pod,
       Stats stats) {
 
-    if (action == Watcher.Action.DELETED) {
+    if ("DELETED".equals(action)) {
       return emptyList();
     }
 
@@ -161,7 +165,7 @@ public final class KubernetesPodEventTranslator {
       return generatedEvents;
     }
 
-    final PodStatus status = pod.getStatus();
+    final V1PodStatus status = pod.getStatus();
     final String phase = status.getPhase();
 
     boolean exited = false;
@@ -172,7 +176,7 @@ public final class KubernetesPodEventTranslator {
       case "Running":
         // check that the styx container is ready
         started = status.getContainerStatuses().stream()
-            .anyMatch(IS_STYX_CONTAINER.and(ContainerStatus::getReady));
+            .anyMatch(IS_STYX_CONTAINER.and(V1ContainerStatus::isReady));
         break;
 
       case "Succeeded":
@@ -223,8 +227,8 @@ public final class KubernetesPodEventTranslator {
     return generatedEvents;
   }
 
-  private static Optional<Event> isInErrorState(WorkflowInstance workflowInstance, Pod pod) {
-    final PodStatus status = pod.getStatus();
+  private static Optional<Event> isInErrorState(WorkflowInstance workflowInstance, V1Pod pod) {
+    final V1PodStatus status = pod.getStatus();
     final String phase = status.getPhase();
 
     switch (phase) {
@@ -237,7 +241,7 @@ public final class KubernetesPodEventTranslator {
 
       case "Succeeded":
       case "Failed":
-        final Optional<ContainerStatus> containerStatusOpt =
+        final Optional<V1ContainerStatus> containerStatusOpt =
             pod.getStatus().getContainerStatuses().stream()
                 .filter(IS_STYX_CONTAINER)
                 .findFirst();
@@ -246,8 +250,8 @@ public final class KubernetesPodEventTranslator {
           return Optional.of(Event.runError(workflowInstance, "Could not find our container in pod"));
         }
 
-        final ContainerStatus containerStatus = containerStatusOpt.get();
-        final ContainerStateTerminated terminated = containerStatus.getState().getTerminated();
+        final V1ContainerStatus containerStatus = containerStatusOpt.get();
+        final V1ContainerStateTerminated terminated = containerStatus.getState().getTerminated();
         if (terminated == null) {
           return Optional.of(Event.runError(workflowInstance, "Unexpected null terminated status"));
         }
@@ -261,8 +265,8 @@ public final class KubernetesPodEventTranslator {
     }
   }
 
-  static boolean hasPullImageError(ContainerStatus cs) {
-    ContainerStateWaiting waiting = cs.getState().getWaiting();
+  static boolean hasPullImageError(V1ContainerStatus cs) {
+    V1ContainerStateWaiting waiting = cs.getState().getWaiting();
     return waiting != null && (
         "PullImageError".equals(waiting.getReason())
         || "ErrImagePull".equals(waiting.getReason())

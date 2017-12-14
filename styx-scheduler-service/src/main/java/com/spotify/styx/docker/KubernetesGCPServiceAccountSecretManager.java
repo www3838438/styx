@@ -32,14 +32,16 @@ import com.google.common.hash.Hashing;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.spotify.styx.ServiceAccountKeyManager;
 import com.spotify.styx.util.GcpUtil;
-import io.fabric8.kubernetes.api.model.Pod;
-import io.fabric8.kubernetes.api.model.PodList;
 import io.fabric8.kubernetes.api.model.Secret;
-import io.fabric8.kubernetes.api.model.SecretBuilder;
-import io.fabric8.kubernetes.api.model.SecretList;
-import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
-import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
+import io.kubernetes.client.ApiException;
+import io.kubernetes.client.apis.CoreV1Api;
+import io.kubernetes.client.models.V1DeleteOptions;
+import io.kubernetes.client.models.V1ObjectMeta;
+import io.kubernetes.client.models.V1Pod;
+import io.kubernetes.client.models.V1PodList;
+import io.kubernetes.client.models.V1Secret;
+import io.kubernetes.client.models.V1SecretList;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
@@ -76,7 +78,7 @@ class KubernetesGCPServiceAccountSecretManager {
   // todo: use config value instead of hardcoded 24 hour timeout
   private static final Duration SECRET_GC_GRACE_PERIOD = DEFAULT_SECRET_EPOCH_PERIOD.plusHours(24);
 
-  private final KubernetesClient client;
+  private final CoreV1Api client;
   private final ServiceAccountKeyManager keyManager;
   private final EpochProvider epochProvider;
   private final Clock clock;
@@ -86,7 +88,7 @@ class KubernetesGCPServiceAccountSecretManager {
       .build();
 
   KubernetesGCPServiceAccountSecretManager(
-      NamespacedKubernetesClient client,
+      CoreV1Api client,
       ServiceAccountKeyManager keyManager,
       EpochProvider epochProvider,
       Clock clock) {
@@ -96,7 +98,7 @@ class KubernetesGCPServiceAccountSecretManager {
     this.clock = Objects.requireNonNull(clock);
   }
 
-  KubernetesGCPServiceAccountSecretManager(NamespacedKubernetesClient client,
+  KubernetesGCPServiceAccountSecretManager(CoreV1Api client,
       ServiceAccountKeyManager keyManager) {
     this(client, keyManager, DEFAULT_SECRET_EPOCH_PROVIDER, DEFAULT_CLOCK);
   }
@@ -126,7 +128,7 @@ class KubernetesGCPServiceAccountSecretManager {
   }
 
   private String getOrCreateSecret(String workflowId, String serviceAccount, long epoch, String secretName)
-      throws IOException {
+      throws IOException, ApiException {
     // Check that the service account exists
     final boolean serviceAccountExists = keyManager.serviceAccountExists(serviceAccount);
     if (!serviceAccountExists) {
@@ -135,7 +137,8 @@ class KubernetesGCPServiceAccountSecretManager {
     }
 
     // Check for existing secret
-    final Secret existingSecret = client.secrets().withName(secretName).get();
+    final V1Secret
+        existingSecret = client.readNamespacedSecret(secretName, "default", null, null, null);
     if (existingSecret != null) {
       final Map<String, String> annotations = existingSecret.getMetadata().getAnnotations();
       final String jsonKeyName = annotations.get(STYX_WORKFLOW_SA_JSON_KEY_NAME_ANNOTATION);
@@ -150,7 +153,7 @@ class KubernetesGCPServiceAccountSecretManager {
       // Delete secret and any lingering key before creating new keys
       keyManager.deleteKey(jsonKeyName);
       keyManager.deleteKey(p12KeyName);
-      client.secrets().delete(existingSecret);
+      client.deleteNamespacedSecret(secretName, "default", new V1DeleteOptions(), null, null, null, null);
     }
 
     // Create service account keys and secret
@@ -160,7 +163,7 @@ class KubernetesGCPServiceAccountSecretManager {
   }
 
   private void createSecret(String workflowId, String serviceAccount, long epoch, String secretName)
-      throws IOException {
+      throws IOException, ApiException {
     final ServiceAccountKey jsonKey;
     final ServiceAccountKey p12Key;
     try {
@@ -171,9 +174,9 @@ class KubernetesGCPServiceAccountSecretManager {
       throw e;
     }
 
-    final Map<String, String> keys = ImmutableMap.of(
-        STYX_WORKFLOW_SA_JSON_KEY, jsonKey.getPrivateKeyData(),
-        STYX_WORKFLOW_SA_P12_KEY, p12Key.getPrivateKeyData()
+    final ImmutableMap<String, byte[]> keys = ImmutableMap.of(
+        STYX_WORKFLOW_SA_JSON_KEY, jsonKey.getPrivateKeyData().getBytes(),
+        STYX_WORKFLOW_SA_P12_KEY, p12Key.getPrivateKeyData().getBytes()
     );
 
     final Map<String, String> annotations = ImmutableMap.of(
@@ -183,15 +186,11 @@ class KubernetesGCPServiceAccountSecretManager {
         STYX_WORKFLOW_SA_EPOCH_ANNOTATION, Long.toString(epoch)
     );
 
-    final Secret newSecret = new SecretBuilder()
-        .withNewMetadata()
-        .withName(secretName)
-        .withAnnotations(annotations)
-        .endMetadata()
-        .withData(keys)
-        .build();
+    final V1Secret newSecret = new V1Secret()
+        .metadata(new V1ObjectMeta().name(secretName).annotations(annotations))
+        .data(keys);
 
-    client.secrets().create(newSecret);
+    client.createNamespacedSecret("default", newSecret, null);
 
     logger.info("[AUDIT] Secret {} created to store keys of {} referred by workflow {}, jsonKey: {}, p12Key: {}",
         secretName, serviceAccount, workflowId, jsonKey.getName(), p12Key.getName());
@@ -205,9 +204,10 @@ class KubernetesGCPServiceAccountSecretManager {
     }
   }
 
-  public void cleanup() throws IOException {
+  public void cleanup() throws ApiException {
     // Enumerate all secrets currently used by non-terminated pods
-    final PodList pods = client.pods().list();
+    final V1PodList
+        pods = client.listNamespacedPod("default", null, null, null, null, null, null, null, null, null);
     final Set<String> activeSecrets = pods.getItems().stream()
         .filter(pod -> !isTerminatedPod(pod))
         .flatMap(pod -> pod.getSpec().getVolumes().stream())
@@ -217,21 +217,22 @@ class KubernetesGCPServiceAccountSecretManager {
     // Enumerate service account secrets to delete
     final long nowMillis = clock.millis();
     final Instant creationDeadline = clock.instant().minus(SECRET_GC_GRACE_PERIOD);
-    final SecretList secrets = client.secrets().list();
-    final List<Secret> inactiveServiceAccountSecrets = secrets.getItems().stream()
+    final V1SecretList
+        secrets = client.listNamespacedSecret("default", null, null, null, null, null, null, null, null, null);
+    final List<V1Secret> inactiveServiceAccountSecrets = secrets.getItems().stream()
         // Only include service account secrets
         .filter(secret -> secret.getMetadata().getName().startsWith(STYX_WORKFLOW_SA_SECRET_NAME))
         // Exclude secrets in the current epoch
         .filter(secret -> !Long.toString(epochProvider.epoch(nowMillis, serviceAccount(secret)))
             .equals(secretEpoch(secret)))
         // Exclude recently created secrets to mitigate races with secret creation around epoch switch
-        .filter(secret -> Instant.parse(secret.getMetadata().getCreationTimestamp()).isBefore(creationDeadline))
+        .filter(secret -> Instant.ofEpochMilli(secret.getMetadata().getCreationTimestamp().getMillis()).isBefore(creationDeadline))
         // Exclude secrets currently in use by pods
         .filter(secret -> !activeSecrets.contains(secret.getMetadata().getName()))
         .collect(Collectors.toList());
 
     // Delete keys and secrets for all inactive service accounts and let them be recreated by future executions
-    for (Secret secret : inactiveServiceAccountSecrets) {
+    for (V1Secret secret : inactiveServiceAccountSecrets) {
       final String name = secret.getMetadata().getName();
       final String serviceAcount = serviceAccount(secret);
 
@@ -247,7 +248,7 @@ class KubernetesGCPServiceAccountSecretManager {
         tryDeleteServiceAccountKey(p12KeyName);
 
         logger.info("[AUDIT] Deleting service account {} secret {}", serviceAcount, name);
-        client.secrets().delete(secret);
+        client.deleteNamespacedSecret(secret.getMetadata().getName(), "default", new V1DeleteOptions(), null, null, null, null);
       } catch (IOException | KubernetesClientException e) {
         logger.warn("[AUDIT] Failed to delete service account {} keys and/or secret {}",
             serviceAcount, name);
@@ -255,7 +256,7 @@ class KubernetesGCPServiceAccountSecretManager {
     }
   }
 
-  private boolean isTerminatedPod(Pod pod) {
+  private boolean isTerminatedPod(V1Pod pod) {
     switch (pod.getStatus().getPhase()) {
       case "Succeeded":
       case "Failed":
@@ -265,11 +266,11 @@ class KubernetesGCPServiceAccountSecretManager {
     }
   }
 
-  private String secretEpoch(Secret secret) {
+  private String secretEpoch(V1Secret secret) {
     return secret.getMetadata().getAnnotations().get(STYX_WORKFLOW_SA_EPOCH_ANNOTATION);
   }
 
-  private String serviceAccount(Secret secret) {
+  private String serviceAccount(V1Secret secret) {
     return secret.getMetadata().getAnnotations().get(STYX_WORKFLOW_SA_ID_ANNOTATION);
   }
 

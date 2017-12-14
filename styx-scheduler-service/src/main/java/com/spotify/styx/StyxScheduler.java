@@ -89,6 +89,9 @@ import com.typesafe.config.Config;
 import io.fabric8.kubernetes.client.ConfigBuilder;
 import io.fabric8.kubernetes.client.DefaultKubernetesClient;
 import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
+import io.kubernetes.client.ApiClient;
+import io.kubernetes.client.apis.CoreV1Api;
+import io.kubernetes.client.util.SSLUtils;
 import java.io.Closeable;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -636,11 +639,11 @@ public class StyxScheduler implements AppInit {
       LOG.info("Creating LocalDockerRunner");
       return closer.register(DockerRunner.local(scheduler, stateManager));
     } else {
-      final NamespacedKubernetesClient kubernetes = closer.register(getKubernetesClient(
-          config, id, createGkeClient(), DefaultKubernetesClient::new));
+      final CoreV1Api kubernetes = getKubernetesClient(
+          config, id, createGkeClient(), DefaultKubernetesClient::new);
       final ServiceAccountKeyManager serviceAccountKeyManager = createServiceAccountKeyManager();
       return closer.register(DockerRunner.kubernetes(kubernetes, stateManager, stats,
-          serviceAccountKeyManager, debug));
+          serviceAccountKeyManager, debug, "default"));
     }
   }
 
@@ -676,8 +679,8 @@ public class StyxScheduler implements AppInit {
     }
   }
 
-  static NamespacedKubernetesClient getKubernetesClient(Config rootConfig, String id,
-      Container gke, KubernetesClientFactory clientFactory) {
+  static CoreV1Api getKubernetesClient(Config rootConfig, String id,
+                                       Container gke, KubernetesClientFactory clientFactory) {
     try {
       final Config config = rootConfig
           .getConfig(GKE_CLUSTER_PATH)
@@ -688,6 +691,20 @@ public class StyxScheduler implements AppInit {
                config.getString(GKE_CLUSTER_ZONE),
                config.getString(GKE_CLUSTER_ID)).execute();
 
+      new ApiClient()
+          .setSslCaCert(SSLUtils.getInputStreamFromDataOrFile(cluster.getMasterAuth().getClusterCaCertificate(), ""))
+      // final ApiClient apiClient = new ApiClient();
+      // apiClient.setKeyManagers(new KeyManager[]{
+      //     SSLUtils.keyManagers(
+      //         cluster.getMasterAuth().getClientCertificateData(),
+      //         cluster.getMasterAuth().getClientCertificateFile(),
+      //         cluster.getMasterAuth().getClientKeyData(),
+      //         cluster.getMasterAuth().getClientKeyFile(),
+      //         "RSA", "",
+      //         null, null
+      //     )
+      // });
+
       final io.fabric8.kubernetes.client.Config kubeConfig = new ConfigBuilder()
           .withMasterUrl("https://" + cluster.getEndpoint())
           .withCaCertData(cluster.getMasterAuth().getClusterCaCertificate())
@@ -696,7 +713,7 @@ public class StyxScheduler implements AppInit {
           .withNamespace(config.getString(GKE_CLUSTER_NAMESPACE))
           .build();
 
-      return clientFactory.apply(kubeConfig);
+      return new CoreV1Api();
     } catch (IOException e) {
       throw Throwables.propagate(e);
     }

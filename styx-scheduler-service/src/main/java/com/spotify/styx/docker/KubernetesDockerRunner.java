@@ -24,7 +24,6 @@ import static com.spotify.styx.docker.KubernetesPodEventTranslator.hasPullImageE
 import static com.spotify.styx.docker.KubernetesPodEventTranslator.translate;
 import static com.spotify.styx.serialization.Json.OBJECT_MAPPER;
 import static com.spotify.styx.state.RunState.State.RUNNING;
-import static java.net.HttpURLConnection.HTTP_GONE;
 import static java.util.stream.Collectors.toSet;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -49,28 +48,22 @@ import com.spotify.styx.state.Trigger;
 import com.spotify.styx.util.Debug;
 import com.spotify.styx.util.IsClosedException;
 import com.spotify.styx.util.TriggerUtil;
-import io.fabric8.kubernetes.api.model.ContainerBuilder;
-import io.fabric8.kubernetes.api.model.ContainerStatus;
-import io.fabric8.kubernetes.api.model.EnvVar;
-import io.fabric8.kubernetes.api.model.EnvVarBuilder;
-import io.fabric8.kubernetes.api.model.Pod;
-import io.fabric8.kubernetes.api.model.PodBuilder;
-import io.fabric8.kubernetes.api.model.PodList;
-import io.fabric8.kubernetes.api.model.PodSpecBuilder;
-import io.fabric8.kubernetes.api.model.Quantity;
-import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
-import io.fabric8.kubernetes.api.model.Secret;
-import io.fabric8.kubernetes.api.model.SecretVolumeSource;
-import io.fabric8.kubernetes.api.model.SecretVolumeSourceBuilder;
-import io.fabric8.kubernetes.api.model.Volume;
-import io.fabric8.kubernetes.api.model.VolumeBuilder;
-import io.fabric8.kubernetes.api.model.VolumeMount;
-import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
-import io.fabric8.kubernetes.client.KubernetesClient;
-import io.fabric8.kubernetes.client.KubernetesClientException;
-import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
-import io.fabric8.kubernetes.client.Watch;
 import io.fabric8.kubernetes.client.Watcher;
+import io.kubernetes.client.ApiException;
+import io.kubernetes.client.apis.CoreV1Api;
+import io.kubernetes.client.models.V1Container;
+import io.kubernetes.client.models.V1ContainerStatus;
+import io.kubernetes.client.models.V1DeleteOptions;
+import io.kubernetes.client.models.V1EnvVar;
+import io.kubernetes.client.models.V1ObjectMeta;
+import io.kubernetes.client.models.V1Pod;
+import io.kubernetes.client.models.V1PodList;
+import io.kubernetes.client.models.V1PodSpec;
+import io.kubernetes.client.models.V1ResourceRequirements;
+import io.kubernetes.client.models.V1Secret;
+import io.kubernetes.client.models.V1SecretVolumeSource;
+import io.kubernetes.client.models.V1Volume;
+import io.kubernetes.client.models.V1VolumeMount;
 import io.norberg.automatter.AutoMatter;
 import java.io.IOException;
 import java.time.Clock;
@@ -127,7 +120,7 @@ class KubernetesDockerRunner implements DockerRunner {
   private final ScheduledExecutorService executor =
       Executors.newSingleThreadScheduledExecutor(THREAD_FACTORY);
 
-  private final KubernetesClient client;
+  private final CoreV1Api coreV1Api;
   private final StateManager stateManager;
   private final Stats stats;
   private final KubernetesGCPServiceAccountSecretManager serviceAccountSecretManager;
@@ -135,43 +128,51 @@ class KubernetesDockerRunner implements DockerRunner {
   private final int pollPodsIntervalSeconds;
   private final int podDeletionDelaySeconds;
   private final Clock clock;
+  private final String namespace;
 
-  private Watch watch;
+  // private Watch watch;
 
-  KubernetesDockerRunner(NamespacedKubernetesClient client, StateManager stateManager, Stats stats,
+  KubernetesDockerRunner(CoreV1Api coreV1Api, StateManager stateManager, Stats stats,
                          KubernetesGCPServiceAccountSecretManager serviceAccountSecretManager,
                          Debug debug, int pollPodsIntervalSeconds, int podDeletionDelaySeconds,
-                         Clock clock) {
+                         Clock clock, String namespace) {
     this.stateManager = Objects.requireNonNull(stateManager);
-    this.client = Objects.requireNonNull(client);
+    this.coreV1Api = Objects.requireNonNull(coreV1Api);
     this.stats = Objects.requireNonNull(stats);
     this.serviceAccountSecretManager = Objects.requireNonNull(serviceAccountSecretManager);
     this.debug = debug;
     this.pollPodsIntervalSeconds = pollPodsIntervalSeconds;
     this.podDeletionDelaySeconds = podDeletionDelaySeconds;
     this.clock = Objects.requireNonNull(clock);
+    this.namespace = namespace;
   }
 
-  KubernetesDockerRunner(NamespacedKubernetesClient client, StateManager stateManager, Stats stats,
+  KubernetesDockerRunner(CoreV1Api coreV1Api, StateManager stateManager, Stats stats,
                          KubernetesGCPServiceAccountSecretManager serviceAccountSecretManager,
-                         Debug debug) {
-    this(client, stateManager, stats, serviceAccountSecretManager, debug,
-        DEFAULT_POLL_PODS_INTERVAL_SECONDS, DEFAULT_POD_DELETION_DELAY_SECONDS, DEFAULT_CLOCK);
+                         Debug debug, String namespace) {
+    this(coreV1Api, stateManager, stats, serviceAccountSecretManager, debug,
+        DEFAULT_POLL_PODS_INTERVAL_SECONDS, DEFAULT_POD_DELETION_DELAY_SECONDS, DEFAULT_CLOCK, namespace);
   }
 
   @Override
   public void start(WorkflowInstance workflowInstance, RunSpec runSpec) throws IOException {
     final KubernetesSecretSpec secretSpec = ensureSecrets(workflowInstance, runSpec);
     try {
-      client.pods().create(createPod(workflowInstance, runSpec, secretSpec));
-    } catch (KubernetesClientException kce) {
+      coreV1Api.createNamespacedPod(namespace,
+                                    createPod(workflowInstance, runSpec, secretSpec),
+                                    null);
+    } catch (ApiException kce) {
       throw new IOException("Failed to create Kubernetes pod", kce);
     }
   }
 
   @Override
   public void cleanup() throws IOException {
-    serviceAccountSecretManager.cleanup();
+    try {
+      serviceAccountSecretManager.cleanup();
+    } catch (ApiException e) {
+      throw new IOException(e);
+    }
   }
 
   private KubernetesSecretSpec ensureSecrets(WorkflowInstance workflowInstance, RunSpec runSpec) {
@@ -204,7 +205,12 @@ class KubernetesDockerRunner implements DockerRunner {
             + STYX_WORKFLOW_SA_SECRET_MOUNT_PATH + " defined that is reserved");
       }
 
-      final Secret secret = client.secrets().withName(specSecret.name()).get();
+      final V1Secret secret;
+      try {
+        secret = coreV1Api.readNamespacedSecret(specSecret.name(), namespace, null, null, null);
+      } catch (ApiException e) {
+        throw new RuntimeException(e);
+      }
       if (secret == null) {
         LOG.warn("[AUDIT] Workflow {} refers to a non-existent secret {}",
                   workflowInstance.workflowId(), specSecret.name());
@@ -220,84 +226,85 @@ class KubernetesDockerRunner implements DockerRunner {
   }
 
   @VisibleForTesting
-  static Pod createPod(WorkflowInstance workflowInstance, RunSpec runSpec, KubernetesSecretSpec secretSpec) {
+  static V1Pod createPod(WorkflowInstance workflowInstance, RunSpec runSpec,
+                  KubernetesSecretSpec secretSpec) {
     final String imageWithTag = runSpec.imageName().contains(":")
-        ? runSpec.imageName()
-        : runSpec.imageName() + ":latest";
+                                ? runSpec.imageName()
+                                : runSpec.imageName() + ":latest";
 
-    final PodBuilder podBuilder = new PodBuilder()
-        .withNewMetadata()
-        .withName(runSpec.executionId())
-        .addToAnnotations(STYX_WORKFLOW_INSTANCE_ANNOTATION, workflowInstance.toKey())
-        .addToAnnotations(DOCKER_TERMINATION_LOGGING_ANNOTATION,
-                          String.valueOf(runSpec.terminationLogging()))
-        .endMetadata();
+    final V1ResourceRequirements resourceRequirements = new V1ResourceRequirements();
+    runSpec.memRequest().ifPresent(s -> resourceRequirements.putRequestsItem("memory", s));
+    runSpec.memLimit().ifPresent(s -> resourceRequirements.putLimitsItem("memory", s));
 
-    final PodSpecBuilder specBuilder = new PodSpecBuilder()
-        .withRestartPolicy("Never");
+    final V1Container container = new V1Container()
+        .resources(resourceRequirements)
+        .name(STYX_RUN)
+        .args(runSpec.args())
+        .image(imageWithTag);
 
-    final ResourceRequirementsBuilder resourceRequirements = new ResourceRequirementsBuilder();
-    runSpec.memRequest().ifPresent(s -> resourceRequirements.addToRequests("memory", new Quantity(s)));
-    runSpec.memLimit().ifPresent(s -> resourceRequirements.addToLimits("memory", new Quantity(s)));
+    buildEnv(workflowInstance, runSpec).forEach(envVar ->
+        container.addEnvItem(new V1EnvVar()
+                                 .name(envVar.getName())
+                                 .value(envVar.getValue()))
+    );
 
-    final ContainerBuilder containerBuilder = new ContainerBuilder()
-        .withName(STYX_RUN)
-        .withImage(imageWithTag)
-        .withArgs(runSpec.args())
-        .withEnv(buildEnv(workflowInstance, runSpec))
-        .withResources(resourceRequirements.build());
+    final V1PodSpec podSpec = new V1PodSpec()
+        .restartPolicy("Never")
+        .containers(Arrays.asList(container));
 
     secretSpec.serviceAccountSecret().ifPresent(serviceAccountSecret -> {
-      final SecretVolumeSource saVolumeSource = new SecretVolumeSourceBuilder()
-          .withSecretName(serviceAccountSecret)
-          .build();
-      final Volume saVolume = new VolumeBuilder()
-          .withName(STYX_WORKFLOW_SA_SECRET_NAME)
-          .withSecret(saVolumeSource)
-          .build();
-      specBuilder.addToVolumes(saVolume);
+      final V1SecretVolumeSource saVolumeSource = new V1SecretVolumeSource()
+          .secretName(serviceAccountSecret);
+      final V1Volume saVolume = new V1Volume()
+          .name(STYX_WORKFLOW_SA_SECRET_NAME)
+          .secret(saVolumeSource);
+      podSpec.addVolumesItem(saVolume);
 
-      final VolumeMount saMount = new VolumeMountBuilder()
-          .withMountPath(STYX_WORKFLOW_SA_SECRET_MOUNT_PATH)
-          .withName(saVolume.getName())
-          .withReadOnly(true)
-          .build();
-      containerBuilder.addToVolumeMounts(saMount);
-      containerBuilder.addToEnv(envVar(STYX_WORKFLOW_SA_ENV_VARIABLE,
-                                       saMount.getMountPath() + STYX_WORKFLOW_SA_JSON_KEY));
+      final V1VolumeMount saMount = new V1VolumeMount()
+          .mountPath(STYX_WORKFLOW_SA_SECRET_MOUNT_PATH)
+          .name(saVolume.getName())
+          .readOnly(true);
+      container.addVolumeMountsItem(saMount);
+      container.addEnvItem(new V1EnvVar()
+                               .name(STYX_WORKFLOW_SA_ENV_VARIABLE)
+                               .value(saMount.getMountPath() + STYX_WORKFLOW_SA_JSON_KEY));
     });
 
     secretSpec.customSecret().ifPresent(secret -> {
-      final SecretVolumeSource secretVolumeSource = new SecretVolumeSourceBuilder()
-          .withSecretName(secret.name())
-          .build();
-      final Volume secretVolume = new VolumeBuilder()
-          .withName(secret.name())
-          .withSecret(secretVolumeSource)
-          .build();
-      specBuilder.addToVolumes(secretVolume);
+      final V1SecretVolumeSource secretVolumeSource = new V1SecretVolumeSource()
+          .secretName(secret.name());
+      final V1Volume secretVolume = new V1Volume()
+          .name(secret.name())
+          .secret(secretVolumeSource);
+      podSpec.addVolumesItem(secretVolume);
 
-      final VolumeMount secretMount = new VolumeMountBuilder()
-          .withMountPath(secret.mountPath())
-          .withName(secretVolume.getName())
-          .withReadOnly(true)
-          .build();
-      containerBuilder.addToVolumeMounts(secretMount);
+      final V1VolumeMount secretMount = new V1VolumeMount()
+          .mountPath(secret.mountPath())
+          .name(secretVolume.getName())
+          .readOnly(true);
+      container.addVolumeMountsItem(secretMount);
     });
 
-    specBuilder.addToContainers(containerBuilder.build());
-    podBuilder.withSpec(specBuilder.build());
+    final V1ObjectMeta metadata = new V1ObjectMeta()
+        .putAnnotationsItem(STYX_WORKFLOW_INSTANCE_ANNOTATION,
+                            workflowInstance.toKey())
+        .putAnnotationsItem(DOCKER_TERMINATION_LOGGING_ANNOTATION,
+                            String.valueOf(runSpec.terminationLogging()))
+        .name(runSpec.executionId());
 
-    return podBuilder.build();
+    return new V1Pod()
+        .apiVersion("v1")
+        .kind("Pod")
+        .metadata(metadata)
+        .spec(podSpec);
   }
 
   @VisibleForTesting
-  static EnvVar envVar(String name, String value) {
-    return new EnvVarBuilder().withName(name).withValue(value).build();
+  static V1EnvVar envVar(String name, String value) {
+    return new V1EnvVar().name(name).value(value);
   }
 
-  private static List<EnvVar> buildEnv(WorkflowInstance workflowInstance,
-                                       RunSpec runSpec) {
+  private static List<V1EnvVar> buildEnv(WorkflowInstance workflowInstance, RunSpec runSpec) {
     return Arrays.asList(
         envVar(COMPONENT_ID,    workflowInstance.workflowId().componentId()),
         // TODO: for backward compatibility, delete later
@@ -323,34 +330,42 @@ class KubernetesDockerRunner implements DockerRunner {
 
   @VisibleForTesting
   void cleanupWithRunState(WorkflowInstance workflowInstance, String executionId) {
-    cleanup(workflowInstance, executionId, containerStatuses ->
-        getStyxContainer(containerStatuses).ifPresent(containerStatus -> {
-          if (hasPullImageError(containerStatus)) {
-            deletePod(workflowInstance, executionId);
-          } else {
-            if (containerStatus.getState().getTerminated() != null) {
-              deletePodIfNonDeletePeriodExpired(workflowInstance, executionId, containerStatus);
+    try {
+      cleanup(workflowInstance, executionId, containerStatuses ->
+          getStyxContainer(containerStatuses).ifPresent(containerStatus -> {
+            if (hasPullImageError(containerStatus)) {
+              deletePod(workflowInstance, executionId);
+            } else {
+              if (containerStatus.getState().getTerminated() != null) {
+                deletePodIfNonDeletePeriodExpired(workflowInstance, executionId, containerStatus);
+              }
             }
-          }
-        }));
+          }));
+    } catch (ApiException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   @VisibleForTesting
   void cleanupWithoutRunState(WorkflowInstance workflowInstance, String executionId) {
-    cleanup(workflowInstance, executionId, containerStatuses -> 
-        getStyxContainer(containerStatuses).ifPresent(containerStatus -> {
-          if (containerStatus.getState().getTerminated() != null) {
-            deletePodIfNonDeletePeriodExpired(workflowInstance, executionId, containerStatus);
-          } else {
-            // if not terminated, delete it directly
-            deletePod(workflowInstance, executionId);
-          }
-        }));
+    try {
+      cleanup(workflowInstance, executionId, containerStatuses ->
+          getStyxContainer(containerStatuses).ifPresent(containerStatus -> {
+            if (containerStatus.getState().getTerminated() != null) {
+              deletePodIfNonDeletePeriodExpired(workflowInstance, executionId, containerStatus);
+            } else {
+              // if not terminated, delete it directly
+              deletePod(workflowInstance, executionId);
+            }
+          }));
+    } catch (ApiException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   private void deletePodIfNonDeletePeriodExpired(WorkflowInstance workflowInstance,
                                                  String executionId,
-                                                 ContainerStatus containerStatus) {
+                                                 V1ContainerStatus containerStatus) {
     if (isNonDeletePeriodExpired(containerStatus)) {
       // if terminated and after graceful period, delete the pod
       // otherwise wait until next polling happens
@@ -359,9 +374,10 @@ class KubernetesDockerRunner implements DockerRunner {
   }
 
   private void cleanup(WorkflowInstance workflowInstance, String executionId, 
-                       Consumer<List<ContainerStatus>> cleaner) {
-    Optional.ofNullable(client.pods().withName(executionId).get()).ifPresent(pod -> {
-      final List<ContainerStatus> containerStatuses = pod.getStatus().getContainerStatuses();
+                       Consumer<List<V1ContainerStatus>> cleaner) throws ApiException {
+    Optional.ofNullable(
+        coreV1Api.readNamespacedPod(executionId, namespace, null, null, null)).ifPresent(pod -> {
+      final List<V1ContainerStatus> containerStatuses = pod.getStatus().getContainerStatuses();
       if (!containerStatuses.isEmpty()) {
         cleaner.accept(containerStatuses);
       } else {
@@ -371,23 +387,27 @@ class KubernetesDockerRunner implements DockerRunner {
     });
   }
   
-  private static Optional<ContainerStatus> getStyxContainer(List<ContainerStatus> containerStatuses) {
+  private static Optional<V1ContainerStatus> getStyxContainer(List<V1ContainerStatus> containerStatuses) {
     return containerStatuses.stream()
         .filter(containerStatus -> containerStatus.getName().equals(STYX_RUN))
         .findFirst();
   }
   
-  private boolean isNonDeletePeriodExpired(ContainerStatus containerStatus) {
+  private boolean isNonDeletePeriodExpired(V1ContainerStatus containerStatus) {
     return Optional.ofNullable(containerStatus.getState().getTerminated().getFinishedAt())
-        .map(finishedAt -> Instant.parse(finishedAt)
-            .isBefore(clock.instant().minus(
-                Duration.ofSeconds(podDeletionDelaySeconds))))
+        .map(finishedAt -> Instant.ofEpochMilli(finishedAt.getMillis())
+            .isBefore(clock.instant().minus(Duration.ofSeconds(podDeletionDelaySeconds))))
         .orElse(true);
   }
   
   private void deletePod(WorkflowInstance workflowInstance, String executionId) {
     if (!debug.get()) {
-      client.pods().withName(executionId).delete();
+      try {
+        coreV1Api
+            .deleteNamespacedPod(executionId, namespace, new V1DeleteOptions(), null, null, null, null);
+      } catch (ApiException e) {
+        LOG.warn("could not delete pod", e);
+      }
       LOG.info("Cleaned up {} pod: {}", workflowInstance.toKey(), executionId);
     } else {
       LOG.info("Keeping {} pod: {}", workflowInstance.toKey(), executionId);
@@ -396,9 +416,9 @@ class KubernetesDockerRunner implements DockerRunner {
 
   @Override
   public void close() throws IOException {
-    if (watch != null) {
-      watch.close();
-    }
+    // if (watch != null) {
+    //   watch.close();
+    // }
     executor.shutdown();
     try {
       executor.awaitTermination(30, TimeUnit.SECONDS);
@@ -438,8 +458,8 @@ class KubernetesDockerRunner implements DockerRunner {
         pollPodsIntervalSeconds,
         TimeUnit.SECONDS);
 
-    watch = client.pods()
-        .watch(new PodWatcher());
+    // watch = client.pods()
+    //     .watch(new PodWatcher());
   }
 
   private Set<WorkflowInstance> getRunningWorkflowInstances() {
@@ -452,7 +472,7 @@ class KubernetesDockerRunner implements DockerRunner {
   }
 
   private void examineRunningWFISandAssociatedPods(Set<WorkflowInstance> runningWorkflowInstances,
-                                                   PodList podList) {
+                                                   V1PodList podList) {
     final Set<WorkflowInstance> workflowInstancesForPods = podList.getItems().stream()
         .filter(pod -> pod.getMetadata().getAnnotations()
             .containsKey(STYX_WORKFLOW_INSTANCE_ANNOTATION))
@@ -476,19 +496,27 @@ class KubernetesDockerRunner implements DockerRunner {
 
   private synchronized void tryPollPods() {
     final Set<WorkflowInstance> runningWorkflowInstances = getRunningWorkflowInstances();
-    final PodList list = client.pods().list();
+    final V1PodList list;
+    try {
+      list = coreV1Api.listNamespacedPod(namespace, null, null, null, null, null, null, null, null, null);
+    } catch (ApiException e) {
+      e.printStackTrace();
+      return;
+    }
     examineRunningWFISandAssociatedPods(runningWorkflowInstances, list);
 
 
-    for (Pod pod : list.getItems()) {
-      logEvent(Watcher.Action.MODIFIED, pod, list.getMetadata().getResourceVersion(), true);
+    for (V1Pod pod : list.getItems()) {
+      // TODO
+      // logEvent(Watcher.Action.MODIFIED, pod, list.getMetadata().getResourceVersion(), true);
       final Optional<WorkflowInstance> workflowInstance = readPodWorkflowInstance(pod);
       if (!workflowInstance.isPresent()) {
         continue;
       }
       final Optional<RunState> runState = lookupPodRunState(pod, workflowInstance.get());
       if (runState.isPresent()) {
-        emitPodEvents(Watcher.Action.MODIFIED, pod, runState.get());
+        // TODO
+        // emitPodEvents(Watcher.Action.MODIFIED, pod, runState.get());
         cleanupWithRunState(workflowInstance.get(), pod.getMetadata().getName());
       } else {
         cleanupWithoutRunState(workflowInstance.get(), pod.getMetadata().getName());
@@ -496,7 +524,7 @@ class KubernetesDockerRunner implements DockerRunner {
     }
   }
 
-  private Optional<WorkflowInstance> readPodWorkflowInstance(Pod pod) {
+  private Optional<WorkflowInstance> readPodWorkflowInstance(V1Pod pod) {
     final Map<String, String> annotations = pod.getMetadata().getAnnotations();
     final String podName = pod.getMetadata().getName();
     if (!annotations.containsKey(KubernetesDockerRunner.STYX_WORKFLOW_INSTANCE_ANNOTATION)) {
@@ -510,7 +538,7 @@ class KubernetesDockerRunner implements DockerRunner {
     return Optional.of(workflowInstance);
   }
 
-  private Optional<RunState> lookupPodRunState(Pod pod, WorkflowInstance workflowInstance) {
+  private Optional<RunState> lookupPodRunState(V1Pod pod, WorkflowInstance workflowInstance) {
     final String podName = pod.getMetadata().getName();
 
     final RunState runState = stateManager.get(workflowInstance);
@@ -535,7 +563,7 @@ class KubernetesDockerRunner implements DockerRunner {
     return Optional.of(runState);
   }
 
-  private void emitPodEvents(Watcher.Action action, Pod pod, RunState runState) {
+  private void emitPodEvents(String action, V1Pod pod, RunState runState) {
     final List<Event> events = translate(runState.workflowInstance(), runState, action, pod, stats);
 
     for (Event event : events) {
@@ -552,7 +580,7 @@ class KubernetesDockerRunner implements DockerRunner {
     }
   }
 
-  private void logEvent(Watcher.Action action, Pod pod, String resourceVersion,
+  private void logEvent(Watcher.Action action, V1Pod pod, String resourceVersion,
                         boolean polled) {
     final String podName = pod.getMetadata().getName();
     final String workflowInstance = pod.getMetadata().getAnnotations()
@@ -563,53 +591,53 @@ class KubernetesDockerRunner implements DockerRunner {
              polled ? "Polled: " : "", podName, resourceVersion, action, workflowInstance, status);
   }
 
-  private String readStatus(Pod pod) {
+  private String readStatus(V1Pod pod) {
     try {
       return OBJECT_MAPPER.writeValueAsString(pod.getStatus());
     } catch (JsonProcessingException e) {
       return pod.getStatus().toString();
     }
   }
-
-  public class PodWatcher implements Watcher<Pod> {
-
-    private static final int RECONNECT_DELAY_SECONDS = 1;
-
-    @Override
-    public void eventReceived(Action action, Pod pod) {
-      if (pod == null) {
-        return;
-      }
-
-      logEvent(action, pod, pod.getMetadata().getResourceVersion(), false);
-
-      readPodWorkflowInstance(pod)
-          .flatMap(workflowInstance -> lookupPodRunState(pod, workflowInstance))
-          .ifPresent(runState -> emitPodEvents(action, pod, runState));
-    }
-
-    private void reconnect() {
-      LOG.warn("Re-establishing pod watcher");
-
-      try {
-        watch = client.pods()
-            .watch(this);
-      } catch (Throwable e) {
-        LOG.warn("Retry threw", e);
-        scheduleReconnect();
-      }
-    }
-
-    private void scheduleReconnect() {
-      executor.schedule(this::reconnect, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
-    }
-
-    @Override
-    public void onClose(KubernetesClientException e) {
-      LOG.warn("Watch closed", e);
-      scheduleReconnect();
-    }
-  }
+  //
+  // public class PodWatcher implements Watcher<Pod> {
+  //
+  //   private static final int RECONNECT_DELAY_SECONDS = 1;
+  //
+  //   @Override
+  //   public void eventReceived(Action action, Pod pod) {
+  //     if (pod == null) {
+  //       return;
+  //     }
+  //
+  //     logEvent(action, pod, pod.getMetadata().getResourceVersion(), false);
+  //
+  //     readPodWorkflowInstance(pod)
+  //         .flatMap(workflowInstance -> lookupPodRunState(pod, workflowInstance))
+  //         .ifPresent(runState -> emitPodEvents(action, pod, runState));
+  //   }
+  //
+  //   private void reconnect() {
+  //     LOG.warn("Re-establishing pod watcher");
+  //
+  //     try {
+  //       watch = coreV1Api.pods()
+  //           .watch(this);
+  //     } catch (Throwable e) {
+  //       LOG.warn("Retry threw", e);
+  //       scheduleReconnect();
+  //     }
+  //   }
+  //
+  //   private void scheduleReconnect() {
+  //     executor.schedule(this::reconnect, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
+  //   }
+  //
+  //   @Override
+  //   public void onClose(KubernetesClientException e) {
+  //     LOG.warn("Watch closed", e);
+  //     // scheduleReconnect();
+  //   }
+  // }
 
   // fixme: add a Cause enum to the runError() event instead of this string matching
   private static class PullImageErrorMatcher implements EventVisitor<Boolean> {
