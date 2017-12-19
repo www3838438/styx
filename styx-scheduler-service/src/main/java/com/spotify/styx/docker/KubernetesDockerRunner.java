@@ -34,6 +34,7 @@ import com.github.rholder.retry.RetryerBuilder;
 import com.github.rholder.retry.StopStrategies;
 import com.github.rholder.retry.WaitStrategies;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.reflect.TypeToken;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.spotify.styx.model.Event;
 import com.spotify.styx.model.EventVisitor;
@@ -48,7 +49,7 @@ import com.spotify.styx.state.Trigger;
 import com.spotify.styx.util.Debug;
 import com.spotify.styx.util.IsClosedException;
 import com.spotify.styx.util.TriggerUtil;
-import io.fabric8.kubernetes.client.Watcher;
+import com.squareup.okhttp.Call;
 import io.kubernetes.client.ApiException;
 import io.kubernetes.client.apis.CoreV1Api;
 import io.kubernetes.client.models.V1Container;
@@ -64,8 +65,11 @@ import io.kubernetes.client.models.V1Secret;
 import io.kubernetes.client.models.V1SecretVolumeSource;
 import io.kubernetes.client.models.V1Volume;
 import io.kubernetes.client.models.V1VolumeMount;
+import io.kubernetes.client.util.Watch;
 import io.norberg.automatter.AutoMatter;
+import java.io.Closeable;
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -78,7 +82,6 @@ import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -112,13 +115,11 @@ class KubernetesDockerRunner implements DockerRunner {
   static final String STYX_WORKFLOW_SA_SECRET_MOUNT_PATH =
       "/etc/" + STYX_WORKFLOW_SA_SECRET_NAME + "/";
 
-  private static final ThreadFactory THREAD_FACTORY = new ThreadFactoryBuilder()
-      .setDaemon(true)
-      .setNameFormat("k8s-scheduler-thread-%d")
-      .build();
-
   private final ScheduledExecutorService executor =
-      Executors.newSingleThreadScheduledExecutor(THREAD_FACTORY);
+      Executors.newSingleThreadScheduledExecutor(new ThreadFactoryBuilder()
+          .setDaemon(true)
+          .setNameFormat("k8s-scheduler-thread-%d")
+          .build());
 
   private final CoreV1Api coreV1Api;
   private final StateManager stateManager;
@@ -129,8 +130,7 @@ class KubernetesDockerRunner implements DockerRunner {
   private final int podDeletionDelaySeconds;
   private final Clock clock;
   private final String namespace;
-
-  // private Watch watch;
+  private final PodWatcher watch;
 
   KubernetesDockerRunner(CoreV1Api coreV1Api, StateManager stateManager, Stats stats,
                          KubernetesGCPServiceAccountSecretManager serviceAccountSecretManager,
@@ -145,6 +145,7 @@ class KubernetesDockerRunner implements DockerRunner {
     this.podDeletionDelaySeconds = podDeletionDelaySeconds;
     this.clock = Objects.requireNonNull(clock);
     this.namespace = namespace;
+    watch = new PodWatcher(coreV1Api);
   }
 
   KubernetesDockerRunner(CoreV1Api coreV1Api, StateManager stateManager, Stats stats,
@@ -416,9 +417,9 @@ class KubernetesDockerRunner implements DockerRunner {
 
   @Override
   public void close() throws IOException {
-    // if (watch != null) {
-    //   watch.close();
-    // }
+    if (watch != null) {
+      watch.close();
+    }
     executor.shutdown();
     try {
       executor.awaitTermination(30, TimeUnit.SECONDS);
@@ -457,9 +458,6 @@ class KubernetesDockerRunner implements DockerRunner {
         pollPodsIntervalSeconds,
         pollPodsIntervalSeconds,
         TimeUnit.SECONDS);
-
-    // watch = client.pods()
-    //     .watch(new PodWatcher());
   }
 
   private Set<WorkflowInstance> getRunningWorkflowInstances() {
@@ -580,7 +578,7 @@ class KubernetesDockerRunner implements DockerRunner {
     }
   }
 
-  private void logEvent(Watcher.Action action, V1Pod pod, String resourceVersion,
+  private void logEvent(String action, V1Pod pod, String resourceVersion,
                         boolean polled) {
     final String podName = pod.getMetadata().getName();
     final String workflowInstance = pod.getMetadata().getAnnotations()
@@ -598,46 +596,62 @@ class KubernetesDockerRunner implements DockerRunner {
       return pod.getStatus().toString();
     }
   }
-  //
-  // public class PodWatcher implements Watcher<Pod> {
-  //
-  //   private static final int RECONNECT_DELAY_SECONDS = 1;
-  //
-  //   @Override
-  //   public void eventReceived(Action action, Pod pod) {
-  //     if (pod == null) {
-  //       return;
-  //     }
-  //
-  //     logEvent(action, pod, pod.getMetadata().getResourceVersion(), false);
-  //
-  //     readPodWorkflowInstance(pod)
-  //         .flatMap(workflowInstance -> lookupPodRunState(pod, workflowInstance))
-  //         .ifPresent(runState -> emitPodEvents(action, pod, runState));
-  //   }
-  //
-  //   private void reconnect() {
-  //     LOG.warn("Re-establishing pod watcher");
-  //
-  //     try {
-  //       watch = coreV1Api.pods()
-  //           .watch(this);
-  //     } catch (Throwable e) {
-  //       LOG.warn("Retry threw", e);
-  //       scheduleReconnect();
-  //     }
-  //   }
-  //
-  //   private void scheduleReconnect() {
-  //     executor.schedule(this::reconnect, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
-  //   }
-  //
-  //   @Override
-  //   public void onClose(KubernetesClientException e) {
-  //     LOG.warn("Watch closed", e);
-  //     // scheduleReconnect();
-  //   }
-  // }
+
+  public class PodWatcher implements Closeable {
+
+    private static final int RECONNECT_DELAY_SECONDS = 1;
+    private final CoreV1Api coreV1Api;
+    private final Thread thread;
+
+    public PodWatcher(CoreV1Api coreV1Api) {
+      this.coreV1Api = coreV1Api;
+      thread = new Thread(this::setup);
+      thread.setDaemon(true);
+      thread.start();
+    }
+
+    private void setup() {
+      LOG.info("establishing pod watcher");
+
+      try {
+        final Call call = coreV1Api.listNamespacedPodCall(
+            namespace, null, null, null, null, null, null, null, null, true, null, null);
+        final Type type = new TypeToken<Watch.Response<V1Pod>>() { }.getType();
+
+        Watch.<V1Pod>createWatch(coreV1Api.getApiClient(), call, type)
+            .forEachRemaining(event -> {
+              final V1Pod pod = event.object;
+              final String action = event.type;
+
+              if (pod == null) {
+                return;
+              }
+
+              logEvent(action, pod, pod.getMetadata().getResourceVersion(), false);
+
+              readPodWorkflowInstance(pod)
+                  .flatMap(workflowInstance -> lookupPodRunState(pod, workflowInstance))
+                  .ifPresent(runState -> emitPodEvents(action, pod, runState));
+            });
+      } catch (Throwable e) {
+        LOG.warn("pod watcher threw", e);
+        scheduleReconnect();
+      }
+    }
+
+    private void scheduleReconnect() {
+      executor.schedule(this::setup, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
+    }
+
+    @Override
+    public void close() throws IOException {
+      try {
+        thread.join(1);
+      } catch (InterruptedException e) {
+        throw new IOException(e);
+      }
+    }
+  }
 
   // fixme: add a Cause enum to the runError() event instead of this string matching
   private static class PullImageErrorMatcher implements EventVisitor<Boolean> {

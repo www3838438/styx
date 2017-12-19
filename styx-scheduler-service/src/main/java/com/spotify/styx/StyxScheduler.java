@@ -692,7 +692,7 @@ public class StyxScheduler implements AppInit {
                config.getString(GKE_CLUSTER_ID)).execute();
 
       new ApiClient()
-          .setSslCaCert(SSLUtils.getInputStreamFromDataOrFile(cluster.getMasterAuth().getClusterCaCertificate(), ""))
+          .setSslCaCert(SSLUtils.getInputStreamFromDataOrFile(cluster.getMasterAuth().getClusterCaCertificate(), ""));
       // final ApiClient apiClient = new ApiClient();
       // apiClient.setKeyManagers(new KeyManager[]{
       //     SSLUtils.keyManagers(

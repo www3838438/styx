@@ -1,7 +1,6 @@
 package com.spotify.styx;
 
 import com.google.common.reflect.TypeToken;
-import io.kubernetes.client.ApiClient;
 import io.kubernetes.client.ApiException;
 import io.kubernetes.client.apis.CoreV1Api;
 import io.kubernetes.client.models.V1Container;
@@ -21,29 +20,23 @@ public class Sandbox {
   @Test
   public void testFoo() {
     try {
-      KubeConfig.registerAuthenticator(new GCPAuthenticator());
+KubeConfig.registerAuthenticator(new GCPAuthenticator());
 
-      final ApiClient client = Config.defaultClient();
-      final CoreV1Api api = new CoreV1Api(client);
+final CoreV1Api api = new CoreV1Api(Config.defaultClient());
 
-      api.listNode("true", null, null, null, null, null, null, null, null)
-          .getItems()
-          .forEach(node -> System.out.println("node = " + node.getMetadata().getName()));
+final int numberOfPods =
+    api.listNamespacedPod("default", null, null, null, null, null, null, null, null, null)
+        .getItems()
+        .size();
 
-      api.listNamespace("true", null, null, null, null, null, null, null, null)
-          .getItems()
-          .forEach(namespace -> System.out.println("namespace = " + namespace.getMetadata().getName()));
-
-      api.listNamespacedPod("default", null, null, null, null, null, null, null, null, null)
-          .getItems()
-          .forEach(pod -> System.out.println("pod = " + pod.getMetadata().getName()));
+System.out.println("numberOfPods = " + numberOfPods);
 
       final Thread watcherThread = new Thread(
           () -> {
-            System.out.println("starting watcher");
+            System.out.println("hello from watcher thread");
             final Watch<V1Pod> watch;
             try {
-              watch = Watch.createWatch(client,
+              watch = Watch.createWatch(api.getApiClient(),
                                         api.listNamespacedPodCall("default", null,
                                                                   null, null, null,
                                                                   null, null, null,
@@ -55,17 +48,14 @@ public class Sandbox {
               throw new RuntimeException(e);
             }
             for (Watch.Response<V1Pod> item : watch) {
-              System.out.println("item.type = " + item.type);
-              System.out.println(
-                  "item.object.getMetadata().getName() = " + item.object.getMetadata().getName());
+              // item.object.getSpec().getContainers().get(0).getArgs();
+              System.out.printf("%-10s %s %s\n", item.type, item.object.getMetadata().getName(), item.object.getStatus().getPhase());
             }
           });
 
       watcherThread.start();
 
       watcherThread.join();
-
-      // createPod(api);
 
     } catch (IOException | ApiException | InterruptedException e) {
       throw new RuntimeException(e);
@@ -88,7 +78,7 @@ public class Sandbox {
                       .namespace("default")
                       .name("jocketest" + System.currentTimeMillis()));
 
-    System.out.println("pod = " + pod);
+    System.out.println("podToBeCreated = " + pod);
 
     final V1Pod createdPod = api.createNamespacedPod("default", pod, null);
 
