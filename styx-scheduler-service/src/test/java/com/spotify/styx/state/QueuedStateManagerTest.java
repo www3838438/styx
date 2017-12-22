@@ -40,7 +40,6 @@ import com.spotify.styx.model.WorkflowInstance;
 import com.spotify.styx.storage.InMemStorage;
 import com.spotify.styx.testdata.TestData;
 import com.spotify.styx.util.IsClosedException;
-import java.time.Instant;
 import java.util.Optional;
 import java.util.SortedSet;
 import java.util.Stack;
@@ -90,7 +89,8 @@ public class QueuedStateManagerTest {
     }
 
     storage = new InMemStorage();
-    stateManager = new QueuedStateManager(Instant::now, POOL1, storage, eventConsumer, POOL2);
+    stateManager = new QueuedStateManager(POOL1, storage, eventConsumer, POOL2,
+        outputHandler);
 
     stateManager.initialize(initial);
     assertTrue(stateManager.awaitIdle(1000));
@@ -280,7 +280,8 @@ public class QueuedStateManagerTest {
 
   @Test
   public void shouldRestoreStateAtCount() throws Exception {
-    stateManager = new QueuedStateManager(Instant::now, POOL1, storage, eventConsumer, POOL2);
+    stateManager = new QueuedStateManager(POOL1, storage, eventConsumer, POOL2,
+        outputHandler);
 
     stateManager.restore(RunState.fresh(INSTANCE), 7L);
     stateManager.receive(Event.timeTrigger(INSTANCE));  // 8
@@ -293,7 +294,8 @@ public class QueuedStateManagerTest {
 
   @Test
   public void shouldHandleThrowingOutputHandler() throws Exception {
-    stateManager = new QueuedStateManager(Instant::now, POOL1, storage, eventConsumer, POOL2);
+    stateManager = new QueuedStateManager(POOL1, storage, eventConsumer, POOL2,
+        outputHandler);
 
     OutputHandler throwing = (state) -> {
       throw new RuntimeException();
@@ -307,7 +309,8 @@ public class QueuedStateManagerTest {
 
   @Test
   public void testGetActiveWorkflowInstance() throws Exception {
-    stateManager = new QueuedStateManager(Instant::now, POOL1, storage, eventConsumer, POOL2);
+    stateManager = new QueuedStateManager(POOL1, storage, eventConsumer, POOL2,
+        outputHandler);
 
     assertThat(stateManager.isActiveWorkflowInstance(INSTANCE), is(false));
 

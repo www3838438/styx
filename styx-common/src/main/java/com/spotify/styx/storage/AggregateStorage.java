@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.function.Function;
 import javaslang.Tuple2;
 import org.apache.hadoop.hbase.client.Connection;
 
@@ -196,6 +197,12 @@ public class AggregateStorage implements Storage {
   @Override
   public void storeBackfill(Backfill backfill) throws IOException {
     datastoreStorage.storeBackfill(backfill);
+  }
+
+  @Override
+  public Tuple2<Long, RunState> updateActiveState(WorkflowInstance workflowInstance,
+      Function<RunState, RunState> update) throws IOException {
+    return datastoreStorage.updateActiveState(workflowInstance, update);
   }
 
   @Override

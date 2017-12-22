@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.function.Function;
 import javaslang.Tuple2;
 
 /**
@@ -258,4 +259,7 @@ public interface Storage {
   Optional<Backfill> backfill(String id) throws IOException;
 
   void storeBackfill(Backfill backfill) throws IOException;
+
+  Tuple2<Long, RunState> updateActiveState(WorkflowInstance workflowInstance, Function<RunState, RunState> update)
+      throws IOException;
 }

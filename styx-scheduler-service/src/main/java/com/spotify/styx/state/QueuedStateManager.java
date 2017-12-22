@@ -20,34 +20,27 @@
 
 package com.spotify.styx.state;
 
-import static com.spotify.styx.util.FutureUtil.exceptionallyCompletedFuture;
+import static java.util.stream.Collectors.toMap;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Throwables;
-import com.google.common.collect.Maps;
 import com.spotify.styx.model.Event;
 import com.spotify.styx.model.SequenceEvent;
 import com.spotify.styx.model.WorkflowId;
 import com.spotify.styx.model.WorkflowInstance;
 import com.spotify.styx.storage.Storage;
-import com.spotify.styx.util.AlreadyInitializedException;
 import com.spotify.styx.util.IsClosedException;
 import com.spotify.styx.util.Time;
 import java.io.IOException;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
-import java.util.stream.Collectors;
+import javaslang.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,110 +59,74 @@ public class QueuedStateManager implements StateManager {
 
   private static final Logger LOG = LoggerFactory.getLogger(QueuedStateManager.class);
 
-  static final String DISPATCHER_THREAD_NAME = "styx-event-dispatcher";
-  static final int EVENT_QUEUE_SIZE = 1024;
-  static final int POLL_TIMEOUT_MILLIS = 10;
-  static final int SHUTDOWN_GRACE_PERIOD_SECONDS = 5;
-  static final long NO_EVENTS_PROCESSED = -1L;
-
-  private final Time time;
   private final Executor outputHandlerExecutor;
   private final Storage storage;
   private final BiConsumer<SequenceEvent, RunState> eventConsumer;
   private final Executor eventConsumerExecutor;
+  private final OutputHandler outputHandler;
 
-  private final ConcurrentMap<WorkflowInstance, InstanceState> states = Maps.newConcurrentMap();
-
-  private final Thread dispatcherThread;
-  private final CountDownLatch closedLatch = new CountDownLatch(1);
-  private final Object signal = new Object();
-  private AtomicInteger activeEvents = new AtomicInteger(0);
   private volatile boolean running = true;
 
   public QueuedStateManager(
-      Time time,
       Executor outputHandlerExecutor,
       Storage storage,
       BiConsumer<SequenceEvent, RunState> eventConsumer,
-      Executor eventConsumerExecutor) {
-    this.time = Objects.requireNonNull(time);
+      Executor eventConsumerExecutor,
+      OutputHandler outputHandler) {
     this.outputHandlerExecutor = Objects.requireNonNull(outputHandlerExecutor);
     this.storage = Objects.requireNonNull(storage);
     this.eventConsumer = Objects.requireNonNull(eventConsumer);
     this.eventConsumerExecutor = Objects.requireNonNull(eventConsumerExecutor);
-    this.dispatcherThread = new Thread(this::dispatch);
-    dispatcherThread.setName(DISPATCHER_THREAD_NAME);
-    dispatcherThread.start();
+    this.outputHandler = outputHandler;
   }
 
   @Override
   public void initialize(RunState runState) throws IsClosedException {
     ensureRunning();
 
-    final WorkflowInstance workflowInstance = runState.workflowInstance();
-    if (states.containsKey(workflowInstance)) {
-      throw new AlreadyInitializedException("RunState initialization called on active instance "
-                                            + workflowInstance.toKey());
-    }
-
-    final long counter;
     try {
-      counter = storage.getLatestStoredCounter(workflowInstance).orElse(NO_EVENTS_PROCESSED);
+      storage.writeActiveState(runState.workflowInstance(), runState, 0L);
     } catch (IOException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
-
-    states.computeIfAbsent(workflowInstance, (wfi) -> new InstanceState(wfi, runState, counter + 1));
   }
 
   @Override
   public void restore(RunState runState, long count) {
-    final WorkflowInstance workflowInstance = runState.workflowInstance();
-    if (states.containsKey(workflowInstance)) {
-      throw new RuntimeException("RunState initialization called on active instance "
-                                 + workflowInstance.toKey());
-    }
-
-    states.computeIfAbsent(workflowInstance, (wfi) -> new InstanceState(wfi, runState, count + 1));
+    // not applicable
   }
 
   @Override
   public CompletionStage<Void> receive(Event event) throws IsClosedException {
     ensureRunning();
-
-    final InstanceState state = states.get(event.workflowInstance());
-    if (state == null) {
-      String message = "Received event for unknown workflow instance: " + event;
-      LOG.warn(message);
-      return exceptionallyCompletedFuture(new IllegalArgumentException(message));
-    }
-
-    CompletionStage<Void> processed = state.transition(event);
-    signalDispatcher();
-    return processed;
+    return process(event);
   }
 
   @Override
   public Map<WorkflowInstance, RunState> activeStates() {
-    return states.entrySet().stream()
-        .collect(Collectors.toMap(Map.Entry::getKey, (entry) -> entry.getValue().runState));
+    try {
+      return storage.readActiveWorkflowInstances().entrySet().stream()
+          .collect(toMap(Entry::getKey, e -> e.getValue()._2));
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   @Override
   public long getActiveStatesCount() {
-    return states.size();
+    // unused method
+    throw new UnsupportedOperationException();
   }
 
   @Override
   public long getQueuedEventsCount() {
-    return states.values().stream()
-        .mapToInt(queue -> queue.queue.size())
-        .sum();
+    // not applicable ?
+    return 0;
   }
 
   @Override
   public long getActiveStatesCount(WorkflowId workflowId) {
-    return states
+    return activeStates()
         .keySet()
         .stream()
         .filter(workflowInstance -> workflowInstance.workflowId().equals(workflowId))
@@ -178,13 +135,29 @@ public class QueuedStateManager implements StateManager {
 
   @Override
   public boolean isActiveWorkflowInstance(WorkflowInstance workflowInstance) {
-    return states.containsKey(workflowInstance);
+    try {
+      // TODO: look up single wfi instead
+      return storage.readActiveWorkflowInstances(workflowInstance.workflowId().componentId())
+          .keySet()
+          .contains(workflowInstance);
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   @Override
   public RunState get(WorkflowInstance workflowInstance) {
-    final InstanceState instanceState = states.get(workflowInstance);
-    return instanceState != null ? instanceState.runState : null;
+    try {
+      // TODO: look up single wfi instead
+      final Tuple2<Long, RunState> t = storage
+          .readActiveWorkflowInstances(workflowInstance.workflowId().componentId())
+          .get(workflowInstance);
+      return t == null
+          ? null
+          : t._2;
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   @Override
@@ -193,63 +166,6 @@ public class QueuedStateManager implements StateManager {
       return;
     }
     running = false;
-
-    LOG.info("Shutting down, waiting for queued events to process");
-
-    try {
-      if (!closedLatch.await(SHUTDOWN_GRACE_PERIOD_SECONDS, TimeUnit.SECONDS)) {
-        dispatcherThread.interrupt();
-        throw new IOException(
-            "Graceful shutdown failed, event loop did not finish within grace period");
-      }
-    } catch (InterruptedException e) {
-      dispatcherThread.interrupt();
-      throw new IOException(e);
-    }
-
-    LOG.info("Shutdown was clean, {} events left in queue", getQueuedEventsCount());
-  }
-
-  /**
-   * Dispatch loop, continuously running on {@link #dispatcherThread}. Mainly calling
-   * {@link InstanceState#mutexPoll()} on all active states.
-   *
-   * <p>The dispatch loop will make a call to {@link #waitForSignal()} between each loop. It does
-   * so to prevent a busy spin that would hog up a full core. The signalling on the other hand
-   * eliminates a systematic latency in event processing.
-   */
-  private void dispatch() {
-    while (running || getQueuedEventsCount() > 0) {
-      states.values().forEach(InstanceState::mutexPoll);
-      waitForSignal();
-    }
-
-    closedLatch.countDown();
-  }
-
-  /**
-   * Sends a signal to the dispatcher thread in order to unblock it's timed wait. Calling this
-   * method is not crucial for the dispatcher thread to do its work, but will unblock it in case
-   * it's waiting.
-   *
-   * <p>This should be called from all methods that receive a new event.
-   */
-  private void signalDispatcher() {
-    synchronized (signal) {
-      signal.notifyAll();
-    }
-  }
-
-  /**
-   * Block (up to {@link #POLL_TIMEOUT_MILLIS} on a call to {@link #signalDispatcher()}.
-   */
-  private void waitForSignal() {
-    synchronized (signal) {
-      try {
-        signal.wait(POLL_TIMEOUT_MILLIS);
-      } catch (InterruptedException ignored) {
-      }
-    }
   }
 
   private void ensureRunning() throws IsClosedException {
@@ -263,187 +179,52 @@ public class QueuedStateManager implements StateManager {
    *
    * <p>Processing a state mean that the event and counter positions that caused the transition
    * will be persisted, and the {@link OutputHandler} of the state is called.
-   *
-   * <p>This method is only called from within a {@link InstanceState#enqueue(Runnable)} block
-   * which means there will only be at most one concurrent call for each {@link InstanceState}.
-   * @param state            The current state that is being processed
-   * @param counterPosition  The counter position at which the state transitioned
    * @param event            The event that transitioned the state
-   * @param processed        A future that will be completed when the state has been processed.
    */
-  private void process(RunState state, long counterPosition, Event event,
-      CompletableFuture<Void> processed) {
-    final WorkflowInstance key = state.workflowInstance();
-    final SequenceEvent sequenceEvent = SequenceEvent.create(
-        event,
-        counterPosition,
-        time.get().toEpochMilli());
+  private CompletionStage<Void> process(Event event) {
 
+    CompletableFuture<Void> processed = new CompletableFuture<>();
+
+    final Tuple2<Long, RunState> nextState;
     try {
-      storeEvent(sequenceEvent);
-
-      if (state.state().isTerminal()) {
-        states.remove(key); // racy when states are re-initialized concurrent with termination
-        storeDeactivation(key);
-      } else {
-        storeActivation(key, state, counterPosition);
-      }
-
+      nextState = storage.updateActiveState(event.workflowInstance(), (RunState prevRunState) -> {
+        try {
+          return prevRunState.transition(event);
+        } catch (IllegalStateException e) {
+          LOG.warn("Illegal state transition", e);
+          throw e;
+        }
+      });
     } catch (IOException e) {
-      LOG.error("Failed to read/write from/to Storage", e);
       processed.completeExceptionally(e);
-      return;
-    } catch (Throwable t) {
-      processed.completeExceptionally(t);
-      throw t;
+      return processed;
     }
 
+    SequenceEvent sequenceEvent = SequenceEvent.create(
+        event, nextState._1, nextState._2.timestamp());
+
     try {
-      eventConsumerExecutor.execute(() -> eventConsumer.accept(sequenceEvent, state));
+      eventConsumerExecutor.execute(() -> eventConsumer.accept(sequenceEvent, nextState._2));
     } catch (Exception e) {
       LOG.warn("Error while consuming event {}", sequenceEvent, e);
     }
 
-    activeEvents.incrementAndGet();
     outputHandlerExecutor.execute(() -> {
       try {
-        state.outputHandler().transitionInto(state);
+        outputHandler.transitionInto(nextState._2);
         processed.complete(null);
       } catch (Throwable e) {
         LOG.warn("Output handler threw", e);
         processed.completeExceptionally(e);
-      } finally {
-        activeEvents.decrementAndGet();
       }
     });
-  }
 
-  private void storeEvent(SequenceEvent sequenceEvent) throws IOException {
-    storage.writeEvent(sequenceEvent);
-  }
-
-  private void storeActivation(WorkflowInstance workflowInstance, RunState state, long lastProcessedCount)
-      throws IOException {
-    storage.writeActiveState(workflowInstance, state, lastProcessedCount);
-  }
-
-  private void storeDeactivation(WorkflowInstance workflowInstance) throws IOException {
-    storage.deleteActiveState(workflowInstance);
+    return processed;
   }
 
   @VisibleForTesting
   boolean awaitIdle(long timeoutMillis) {
-    final long t0 = time.get().toEpochMilli();
-    while (activeEvents.get() > 0 && (time.get().toEpochMilli() - t0) < timeoutMillis) {
-      Thread.yield();
-    }
-
-    return (time.get().toEpochMilli() - t0) < timeoutMillis;
-  }
-
-  private class InstanceState {
-
-    final WorkflowInstance workflowInstance;
-    final Queue<Runnable> queue = new LinkedBlockingQueue<>(EVENT_QUEUE_SIZE);
-    final Semaphore mutex = new Semaphore(1);
-
-    volatile RunState runState;
-    volatile long counter;
-
-    InstanceState(WorkflowInstance workflowInstance, RunState runState, long counter) {
-      this.workflowInstance = workflowInstance;
-      this.runState = runState;
-      this.counter = counter;
-    }
-
-    /**
-     * Transition the state and counter with the given {@link Event}. Then {@link #enqueue(Runnable)}
-     * a call to {@link #process(RunState, long, Event, CompletableFuture)} for persisting and acting on the
-     * transitioned state.
-     *
-     * <p>This method is synchronized so it can make local field updates safely. It is only
-     * synchronized on the inner {@link InstanceState} object, so transitions for different
-     * {@link WorkflowInstance}s can run concurrently.
-     *
-     * @param event  The event to use in the transition
-     */
-    synchronized CompletionStage<Void> transition(Event event) {
-      LOG.debug("Event {} -> {}", event, this);
-      CompletableFuture<Void> processed = new CompletableFuture<>();
-
-      final RunState nextState;
-      try {
-        nextState = runState.transition(event);
-      } catch (IllegalStateException e) {
-        LOG.warn("Illegal state transition", e);
-        processed.completeExceptionally(e);
-        return processed;
-      }
-
-      final long currentCount = counter++;
-      runState = nextState;
-
-      enqueue(() -> process(nextState, currentCount, event, processed));
-      return processed;
-    }
-
-    void enqueue(Runnable transition) {
-      if (queue.offer(transition)) {
-        activeEvents.incrementAndGet();
-      } else {
-        throw new RuntimeException("Transition queue for " + workflowInstance.toKey() + " is full");
-      }
-    }
-
-    /**
-     * Poll the next {@link Runnable} off the {@link #queue} and invoke it on the
-     * {@link #outputHandlerExecutor}, or do nothing if the queue is empty.
-     *
-     * <p>The whole operation is guarded with a mutex, so concurrent calls are safe. Only one
-     * queued {@link Runnable} will be invoked at any point time, effectively making the queue
-     * consumed in a synchronized fashion.
-     *
-     * <p>After each invocation has completed, the task on the {@link #outputHandlerExecutor} will
-     * call {@code mutexPoll()} again to ensure immediate consequent consumption of the queue.
-     */
-    void mutexPoll() {
-      if (queue.isEmpty()) {
-        return;
-      }
-
-      if (mutex.tryAcquire()) {
-        try {
-          // poll and invoke on executor pool
-          outputHandlerExecutor.execute(() -> {
-            try {
-              final Runnable poll = queue.poll();
-              if (poll != null) {
-                try {
-                  invoke(poll);
-                } finally {
-                  activeEvents.decrementAndGet();
-                }
-              }
-            } finally {
-              mutex.release();
-            }
-
-            // continue to consume queue
-            mutexPoll();
-          });
-        } catch (Throwable e) {
-          LOG.error("Failed to submit event worker task", e);
-          mutex.release();
-        }
-      }
-    }
-
-    void invoke(Runnable transition) {
-      try {
-        transition.run();
-      } catch (Throwable e) {
-        LOG.warn("Exception in event runnable for {}", workflowInstance.toKey(), e);
-      }
-    }
+    // not applicable ?
+    return true;
   }
 }

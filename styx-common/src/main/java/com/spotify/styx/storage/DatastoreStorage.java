@@ -69,6 +69,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import javaslang.Tuple;
 import javaslang.Tuple2;
@@ -701,5 +702,24 @@ class DatastoreStorage {
 
   private <T> T read(Entity entity, String property, T defaultValue) {
     return this.<T>readOpt(entity, property).orElse(defaultValue);
+  }
+
+  public Tuple2<Long, RunState> updateActiveState(WorkflowInstance workflowInstance,
+      Function<RunState, RunState> update) throws IOException {
+    final Key key = activeWorkflowInstanceKey(workflowInstance);
+    return storeWithRetries(() -> datastore.runInTransaction(transaction -> {
+      final Entity prevEntity = transaction.get(key);
+      final long prevCounter = prevEntity.getLong(PROPERTY_COUNTER);
+      final long nextCounter = prevCounter + 1;
+      final RunState prevRunState = OBJECT_MAPPER.readValue(
+          prevEntity.getString(PROPERTY_RUN_STATE), RunState.class);
+      final RunState nextRunState = update.apply(prevRunState);
+      final Entity nextEntity = Entity.newBuilder(prevEntity)
+          .set(PROPERTY_RUN_STATE, OBJECT_MAPPER.writeValueAsString(nextRunState))
+          .set(PROPERTY_COUNTER, nextCounter)
+          .build();
+      transaction.update(nextEntity);
+      return Tuple.of(nextCounter, nextRunState);
+    }));
   }
 }

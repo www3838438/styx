@@ -261,6 +261,7 @@ public class StyxScheduler implements AppInit {
   private BackfillTriggerManager backfillTriggerManager;
 
   private Consumer<Workflow> workflowRemoveListener;
+
   private Consumer<Workflow> workflowChangeListener;
 
   private StyxScheduler(Builder builder) {
@@ -310,10 +311,6 @@ public class StyxScheduler implements AppInit {
 
     warmUpCache(workflowCache, storage);
 
-    final QueuedStateManager stateManager = closer.register(
-        new QueuedStateManager(time, outputHandlerExecutor, storage,
-            eventConsumerFactory.apply(environment, stats), eventConsumerExecutor));
-
     final Config staleStateTtlConfig = config.getConfig(STYX_STALE_STATE_TTL_CONFIG);
     final TimeoutConfig timeoutConfig = TimeoutConfig.createFromConfig(staleStateTtlConfig);
 
@@ -325,8 +322,6 @@ public class StyxScheduler implements AppInit {
         dockerId);
     final DockerRunner dockerRunner = instrument(DockerRunner.class, routingDockerRunner, stats, time);
 
-    final RateLimiter dequeueRateLimiter = RateLimiter.create(DEFAULT_SUBMISSION_RATE_PER_SEC);
-
     final OutputHandler[] outputHandlers = new OutputHandler[] {
         transitionLogger(""),
         new DockerRunnerHandler(
@@ -336,6 +331,14 @@ public class StyxScheduler implements AppInit {
         new PublisherHandler(publisher),
         new ExecutionDescriptionHandler(storage, stateManager, new DockerImageValidator())
     };
+
+    final QueuedStateManager stateManager = closer.register(
+        new QueuedStateManager(outputHandlerExecutor, storage,
+            eventConsumerFactory.apply(environment, stats), eventConsumerExecutor,
+            OutputHandler.fanOutput(outputHandlers)));
+
+    final RateLimiter dequeueRateLimiter = RateLimiter.create(DEFAULT_SUBMISSION_RATE_PER_SEC);
+
     final StateFactory stateFactory =
         (workflowInstance) -> RunState.fresh(workflowInstance, time, outputHandlers);
 
