@@ -55,6 +55,7 @@ import com.spotify.styx.model.WorkflowId;
 import com.spotify.styx.model.WorkflowInstance;
 import com.spotify.styx.model.WorkflowState;
 import com.spotify.styx.state.RunState;
+import com.spotify.styx.util.CounterUtil;
 import com.spotify.styx.util.FnWithException;
 import com.spotify.styx.util.ResourceNotFoundException;
 import com.spotify.styx.util.TimeUtil;
@@ -125,14 +126,16 @@ class DatastoreStorage {
 
   private final Datastore datastore;
   private final Duration retryBaseDelay;
+  private final CounterUtil counterUtil;
   private final KeyFactory componentKeyFactory;
 
   @VisibleForTesting
   final Key globalConfigKey;
 
-  DatastoreStorage(Datastore datastore, Duration retryBaseDelay) {
+  DatastoreStorage(Datastore datastore, Duration retryBaseDelay, CounterUtil counterUtil) {
     this.datastore = Objects.requireNonNull(datastore);
     this.retryBaseDelay = Objects.requireNonNull(retryBaseDelay);
+    this.counterUtil = Objects.requireNonNull(counterUtil);
 
     this.componentKeyFactory = datastore.newKeyFactory().setKind(KIND_COMPONENT);
     this.globalConfigKey = datastore.newKeyFactory().setKind(KIND_STYX_CONFIG).newKey(KEY_GLOBAL_CONFIG);
@@ -554,7 +557,11 @@ class DatastoreStorage {
   }
 
   void postResource(Resource resource) throws IOException {
-    storeWithRetries(() -> datastore.put(resourceToEntity(resource)));
+    storeWithRetries(() -> datastore.runInTransaction(transaction -> {
+        counterUtil.updateLimit(transaction, resource.id(), resource.concurrency());
+        return transaction.put(resourceToEntity(resource));
+        // TODO store just in one place, eliminate one of the two calls ^?
+      }));
   }
 
   List<Resource> getResources() {
@@ -707,8 +714,11 @@ class DatastoreStorage {
   public Tuple2<Long, RunState> updateActiveState(WorkflowInstance workflowInstance,
       Function<RunState, RunState> update) throws IOException {
     final Key key = activeWorkflowInstanceKey(workflowInstance);
+    // TODO resources = ...
     return storeWithRetries(() -> datastore.runInTransaction(transaction -> {
       final Entity prevEntity = transaction.get(key);
+      // TODO if transitioning into PREPARE: for each resource:
+      counterUtil.updateCounter(transaction, "resource-x", +1);
       final long prevCounter = prevEntity.getLong(PROPERTY_COUNTER);
       final long nextCounter = prevCounter + 1;
       final RunState prevRunState = OBJECT_MAPPER.readValue(
