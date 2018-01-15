@@ -7,9 +7,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -55,7 +55,7 @@ import com.spotify.styx.model.WorkflowId;
 import com.spotify.styx.model.WorkflowInstance;
 import com.spotify.styx.model.WorkflowState;
 import com.spotify.styx.state.RunState;
-import com.spotify.styx.util.CounterUtil;
+import com.spotify.styx.util.ShardedCounter;
 import com.spotify.styx.util.FnWithException;
 import com.spotify.styx.util.ResourceNotFoundException;
 import com.spotify.styx.util.TimeUtil;
@@ -126,16 +126,16 @@ class DatastoreStorage {
 
   private final Datastore datastore;
   private final Duration retryBaseDelay;
-  private final CounterUtil counterUtil;
+  private final ShardedCounter shardedCounter;
   private final KeyFactory componentKeyFactory;
 
   @VisibleForTesting
   final Key globalConfigKey;
 
-  DatastoreStorage(Datastore datastore, Duration retryBaseDelay, CounterUtil counterUtil) {
+  DatastoreStorage(Datastore datastore, Duration retryBaseDelay, ShardedCounter shardedCounter) {
     this.datastore = Objects.requireNonNull(datastore);
     this.retryBaseDelay = Objects.requireNonNull(retryBaseDelay);
-    this.counterUtil = Objects.requireNonNull(counterUtil);
+    this.shardedCounter = Objects.requireNonNull(shardedCounter);
 
     this.componentKeyFactory = datastore.newKeyFactory().setKind(KIND_COMPONENT);
     this.globalConfigKey = datastore.newKeyFactory().setKind(KIND_STYX_CONFIG).newKey(KEY_GLOBAL_CONFIG);
@@ -558,7 +558,7 @@ class DatastoreStorage {
 
   void postResource(Resource resource) throws IOException {
     storeWithRetries(() -> datastore.runInTransaction(transaction -> {
-        counterUtil.updateLimit(transaction, resource.id(), resource.concurrency());
+        shardedCounter.updateLimit(transaction, resource.id(), resource.concurrency());
         return transaction.put(resourceToEntity(resource));
         // TODO store just in one place, eliminate one of the two calls ^?
       }));
@@ -718,7 +718,7 @@ class DatastoreStorage {
     return storeWithRetries(() -> datastore.runInTransaction(transaction -> {
       final Entity prevEntity = transaction.get(key);
       // TODO if transitioning into PREPARE: for each resource:
-      counterUtil.updateCounter(transaction, "resource-x", +1);
+      shardedCounter.updateCounter(transaction, "resource-x", +1);
       final long prevCounter = prevEntity.getLong(PROPERTY_COUNTER);
       final long nextCounter = prevCounter + 1;
       final RunState prevRunState = OBJECT_MAPPER.readValue(
