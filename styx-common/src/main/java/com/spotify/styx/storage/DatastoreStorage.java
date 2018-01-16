@@ -120,9 +120,9 @@ class DatastoreStorage {
 
   public static final int MAX_RETRIES = 100;
 
-  private final Datastore datastore;
+  final Datastore datastore;
   private final Duration retryBaseDelay;
-  private final KeyFactory componentKeyFactory;
+  final KeyFactory componentKeyFactory;
 
   @VisibleForTesting
   final Key globalConfigKey;
@@ -184,21 +184,10 @@ class DatastoreStorage {
   }
 
   void store(Workflow workflow) throws IOException {
-    storeWithRetries(() -> datastore.runInTransaction(transaction -> {
-      final Key componentKey = componentKeyFactory.newKey(workflow.componentId());
-      if (transaction.get(componentKey) == null) {
-        transaction.put(Entity.newBuilder(componentKey).build());
-      }
-
-      final String json = OBJECT_MAPPER.writeValueAsString(workflow);
-      final Key workflowKey = workflowKey(workflow.id());
-      final Optional<Entity> workflowOpt = getOpt(transaction, workflowKey);
-      final Entity workflowEntity = asBuilderOrNew(workflowOpt, workflowKey)
-          .set(PROPERTY_WORKFLOW_JSON, StringValue.newBuilder(json).setExcludeFromIndexes(true).build())
-          .build();
-
-      return transaction.put(workflowEntity);
-    }));
+    TransactionalStorage transactionalStorage = new DatastoreTransactionalStorage(this);
+    final StorageTransaction transaction = transactionalStorage.newTransaction();
+    transactionalStorage.store(workflow, transaction);
+    transaction.commitOrRollback();
   }
 
   Optional<Workflow> workflow(WorkflowId workflowId) throws IOException {
@@ -419,7 +408,7 @@ class DatastoreStorage {
     return builder.build();
   }
 
-  private <T> T storeWithRetries(FnWithException<T, IOException> storingOperation) throws IOException {
+  public <T> T storeWithRetries(FnWithException<T, IOException> storingOperation) throws IOException {
     int storeRetries = 0;
 
     while (storeRetries < MAX_RETRIES) {
@@ -449,7 +438,7 @@ class DatastoreStorage {
     throw new IOException("This should never happen");
   }
 
-  private Key workflowKey(WorkflowId workflowId) {
+  Key workflowKey(WorkflowId workflowId) {
     return datastore.newKeyFactory()
         .addAncestor(PathElement.of(KIND_COMPONENT, workflowId.componentId()))
         .setKind(KIND_WORKFLOW)
@@ -494,7 +483,7 @@ class DatastoreStorage {
    * @param key              The key to get
    * @return an optional containing the entity if it existed, empty otherwise.
    */
-  private Optional<Entity> getOpt(DatastoreReader datastoreReader, Key key) {
+  Optional<Entity> getOpt(DatastoreReader datastoreReader, Key key) {
     return Optional.ofNullable(datastoreReader.get(key));
   }
 
@@ -516,7 +505,7 @@ class DatastoreStorage {
    * @param key        The key for which to create a new builder if the entity is not present
    * @return an entity builder either based of the given entity or a new one using the key.
    */
-  private Entity.Builder asBuilderOrNew(Optional<Entity> entityOpt, Key key) {
+  Entity.Builder asBuilderOrNew(Optional<Entity> entityOpt, Key key) {
     return entityOpt
         .map(c -> Entity.newBuilder(c))
         .orElse(Entity.newBuilder(key));
