@@ -223,4 +223,9 @@ public class AggregateStorage implements Storage {
   public Optional<Backfill> backfill(String id) throws IOException {
     return datastoreStorage.getBackfill(id);
   }
+
+  @Override
+  public TransactionalStorage newTransactionalStorage() {
+    return new DatastoreTransactionalStorage(datastoreStorage, datastoreStorage.datastore.newTransaction());
+  }
 }
