@@ -183,14 +183,8 @@ class DatastoreStorage {
     return enabledWorkflows;
   }
 
-  void store(Workflow workflow) throws IOException {
-    storeWithRetries(() -> {
-      TransactionalStorage transactionalStorage =
-          new DatastoreTransactionalStorage(this, this.datastore.newTransaction());
-      transactionalStorage.store(workflow);
-      transactionalStorage.commitOrRollback();
-      return null;
-    });
+  WorkflowId store(Workflow workflow) throws IOException {
+    return storeWithRetries(() -> runInTransaction(tx -> tx.store(workflow)));
   }
 
   Optional<Workflow> workflow(WorkflowId workflowId) throws IOException {
@@ -691,5 +685,33 @@ class DatastoreStorage {
 
   private <T> T read(Entity entity, String property, T defaultValue) {
     return this.<T>readOpt(entity, property).orElse(defaultValue);
+  }
+
+  public <T, E extends Exception> T runInTransaction(TransactionFunction<T, E> f)
+      throws TransactionException, E {
+    TransactionalStorage tx = newTransaction();
+    try {
+      T value = f.apply(tx);
+      tx.commit();
+      return value;
+    } catch (TransactionException ex) {
+      tx.rollback();
+      throw ex;
+    } catch (Exception ex) {
+      tx.rollback();
+      throw new TransactionException(false, ex);
+    } finally {
+      if (tx.isActive()) {
+        tx.rollback();
+      }
+    }
+  }
+
+  public TransactionalStorage newTransaction() throws TransactionException {
+    try {
+      return new DatastoreTransactionalStorage(this, datastore.newTransaction());
+    } catch (DatastoreException e) {
+      throw new TransactionException(false, e);
+    }
   }
 }

@@ -23,51 +23,69 @@ package com.spotify.styx.storage;
 import static com.spotify.styx.serialization.Json.OBJECT_MAPPER;
 import static com.spotify.styx.storage.DatastoreStorage.PROPERTY_WORKFLOW_JSON;
 
+import com.google.cloud.datastore.DatastoreException;
 import com.google.cloud.datastore.Entity;
 import com.google.cloud.datastore.Key;
 import com.google.cloud.datastore.StringValue;
 import com.google.cloud.datastore.Transaction;
 import com.spotify.styx.model.Workflow;
+import com.spotify.styx.model.WorkflowId;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
 
 public class DatastoreTransactionalStorage implements TransactionalStorage {
 
-  private final Transaction datastoreTransaction;
-  private final DatastoreStorage datastoreStorage;
+  private final Transaction tx;
+  private final DatastoreStorage storage;
 
-  DatastoreTransactionalStorage(DatastoreStorage datastoreStorage, Transaction transaction) {
-    this.datastoreStorage = Objects.requireNonNull(datastoreStorage);
-    this.datastoreTransaction = Objects.requireNonNull(transaction);
+  DatastoreTransactionalStorage(DatastoreStorage storage,
+      Transaction transaction) {
+    this.storage = Objects.requireNonNull(storage);
+    this.tx = Objects.requireNonNull(transaction);
   }
 
   @Override
-  public void commitOrRollback() throws IOException {
+  public void commit() throws TransactionException {
     try {
-      datastoreTransaction.commit();
-    } finally {
-      if (datastoreTransaction.isActive()) {
-        datastoreTransaction.rollback();
-      }
+      tx.commit();
+    } catch (DatastoreException e) {
+      final boolean conflict = e.getCode() == 10;
+      throw new TransactionException(conflict, e);
     }
   }
 
   @Override
-  public void store(Workflow workflow) throws IOException {
-    final Key componentKey = datastoreStorage.componentKeyFactory.newKey(workflow.componentId());
-    if (datastoreTransaction.get(componentKey) == null) {
-      datastoreTransaction.put(Entity.newBuilder(componentKey).build());
+  public void rollback() throws TransactionException {
+    try {
+      tx.rollback();
+    } catch (DatastoreException e) {
+      throw new TransactionException(false, e);
+    }
+  }
+
+  @Override
+  public boolean isActive() {
+    return tx.isActive();
+  }
+
+  @Override
+  public WorkflowId store(Workflow workflow) throws IOException {
+    final Key componentKey = storage.componentKeyFactory.newKey(workflow.componentId());
+    if (tx.get(componentKey) == null) {
+      tx.put(Entity.newBuilder(componentKey).build());
     }
 
     final String json = OBJECT_MAPPER.writeValueAsString(workflow);
-    final Key workflowKey = datastoreStorage.workflowKey(workflow.id());
-    final Optional<Entity>
-        workflowOpt = datastoreStorage.getOpt(datastoreTransaction, workflowKey);
-    final Entity workflowEntity = datastoreStorage.asBuilderOrNew(workflowOpt, workflowKey)
+    final Key workflowKey = storage.workflowKey(workflow.id());
+    final Optional<Entity> workflowOpt = storage.getOpt(tx, workflowKey);
+    final Entity workflowEntity = storage.asBuilderOrNew(workflowOpt, workflowKey)
         .set(PROPERTY_WORKFLOW_JSON,
             StringValue.newBuilder(json).setExcludeFromIndexes(true).build())
         .build();
-    datastoreTransaction.put(workflowEntity);
+
+    tx.put(workflowEntity);
+
+    return workflow.id();
   }
 }
