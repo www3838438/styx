@@ -20,6 +20,8 @@
 
 package com.spotify.styx.storage;
 
+import static org.junit.Assert.fail;
+
 import com.spotify.styx.model.Workflow;
 import java.io.IOException;
 import java.util.concurrent.ThreadLocalRandom;
@@ -44,11 +46,12 @@ public class StorageTest {
           case 0:
             throw new FooException();
           case 1:
-            tx.store(workflow);
+            return tx.store(workflow);
           default:
             return "foo";
         }
       });
+      fail(); // Satisfy static analysis rule requiring assert or fail in junit tests
     } catch (IOException | FooException ignore) {
       // The throws declaration of the above lambda should be inferred to FooException, not the
       // generic Exception. This allows a try/catch wrapping the runInTransaction call to catch
