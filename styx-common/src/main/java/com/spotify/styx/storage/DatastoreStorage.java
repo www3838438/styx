@@ -193,7 +193,7 @@ class DatastoreStorage {
   }
 
   WorkflowId store(Workflow workflow) throws IOException {
-    return storeWithRetries(() -> runInTransaction(tx -> tx.store(workflow)));
+    return runInTransaction(tx -> tx.store(workflow));
   }
 
   Optional<Workflow> workflow(WorkflowId workflowId) throws IOException {
