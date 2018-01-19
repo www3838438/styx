@@ -20,21 +20,13 @@
 
 package com.spotify.styx.storage;
 
-public class TransactionException extends StorageException {
+public class TransactionConflictException extends Exception {
 
-  private final boolean conflict;
-
-  public TransactionException(String message, boolean conflict, Throwable cause) {
+  public TransactionConflictException(String message, Throwable cause) {
     super(message, cause);
-    this.conflict = conflict;
   }
 
-  public TransactionException(boolean conflict, Throwable cause) {
+  public TransactionConflictException(Throwable cause) {
     super(cause);
-    this.conflict = conflict;
-  }
-
-  public boolean isConflict() {
-    return conflict;
   }
 }

@@ -36,6 +36,7 @@ import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.when;
 
@@ -498,22 +499,48 @@ public class DatastoreStorageTest {
 
   @Test
   public void basicRunInTransaction() throws Exception {
-    TransactionFunction<String, Exception> f = (tx) -> "foo";
+    TransactionFunction<String> f = (tx) -> "foo";
     final String string = storage.runInTransaction(f);
     assertThat(string, is("foo"));
   }
 
-  @Test(expected = TransactionException.class)
-  public void shouldThrowIfDatastoreError() throws Exception {
+  @Test(expected = TransactionConflictException.class)
+  public void shouldThrowIfConflict() throws Exception {
     when(datastore.runInTransaction(any())).thenThrow(new DatastoreException(10, "", ""));
     DatastoreStorage storage = new DatastoreStorage(datastore, Duration.ZERO);
-    TransactionFunction<String, IOException> f = (tx) -> "foo";
+    TransactionFunction<String> f = (tx) -> "foo";
     storage.runInTransaction(f);
   }
 
   @Test(expected = IOException.class)
+  public void shouldThrowIfDatastoreError() throws Exception {
+    when(datastore.runInTransaction(any())).thenThrow(new DatastoreException(0, "", ""));
+    DatastoreStorage storage = new DatastoreStorage(datastore, Duration.ZERO);
+    TransactionFunction<String> f = (tx) -> "foo";
+    try {
+      storage.runInTransaction(f);
+    } catch (TransactionConflictException e) {
+      fail();
+    }
+  }
+
+  @Test(expected = IOException.class)
   public void shouldThrowIfUnknownErrorInFunction() throws Exception {
-    TransactionFunction<String, IOException> f = (tx) -> { throw new IOException(); };
-    storage.runInTransaction(f);
+    TransactionFunction<String> f = (tx) -> { throw new IOException(); };
+    try {
+      storage.runInTransaction(f);
+    } catch (TransactionConflictException e) {
+      fail();
+    }
+  }
+
+  @Test(expected = IOException.class)
+  public void shouldThrowIfRuntimeErrorInFunction() throws Exception {
+    TransactionFunction<String> f = (tx) -> { throw new RuntimeException(); };
+    try {
+      storage.runInTransaction(f);
+    } catch (TransactionConflictException e) {
+      fail();
+    }
   }
 }

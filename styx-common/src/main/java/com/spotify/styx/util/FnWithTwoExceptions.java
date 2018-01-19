@@ -1,8 +1,8 @@
-/*
+/*-
  * -\-\-
- * Spotify Styx Scheduler Service
+ * Spotify Styx Common
  * --
- * Copyright (C) 2018 Spotify AB
+ * Copyright (C) 2016 Spotify AB
  * --
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,9 @@
  * -/-/-
  */
 
-package com.spotify.styx.storage;
+package com.spotify.styx.util;
 
-import java.io.IOException;
+public interface FnWithTwoExceptions<T, E extends Exception, X extends Exception> {
 
-public interface TransactionFunction<T> {
-
-  T apply(TransactionalStorage tx) throws IOException;
+  T apply() throws E, X;
 }

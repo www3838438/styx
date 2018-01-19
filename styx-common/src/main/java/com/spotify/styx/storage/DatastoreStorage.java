@@ -55,6 +55,7 @@ import com.spotify.styx.model.WorkflowId;
 import com.spotify.styx.model.WorkflowInstance;
 import com.spotify.styx.model.WorkflowState;
 import com.spotify.styx.util.FnWithException;
+import com.spotify.styx.util.FnWithTwoExceptions;
 import com.spotify.styx.util.ResourceNotFoundException;
 import com.spotify.styx.util.TimeUtil;
 import com.spotify.styx.util.TriggerInstantSpec;
@@ -184,7 +185,7 @@ class DatastoreStorage {
   }
 
   WorkflowId store(Workflow workflow) throws IOException {
-    return storeWithRetries(() -> runInTransaction(tx -> tx.store(workflow)));
+    return transactionWithRetriesOnConflict(() -> runInTransaction(tx -> tx.store(workflow)));
   }
 
   Optional<Workflow> workflow(WorkflowId workflowId) throws IOException {
@@ -420,7 +421,71 @@ class DatastoreStorage {
 
         storeRetries++;
         if (storeRetries == MAX_RETRIES) {
-          throw e;
+          throw new IOException("Maximum number of retries reached", e);
+        }
+
+        LOG.warn(String.format("Failed to read/write from/to Datastore (attempt #%d)", storeRetries), e);
+        try {
+          Thread.sleep(retryBaseDelay.toMillis());
+        } catch (InterruptedException e1) {
+          throw Throwables.propagate(e1);
+        }
+      }
+    }
+
+    throw new IOException("This should never happen");
+  }
+
+  private <T> T transactionWithRetriesOnConflict(
+      FnWithTwoExceptions<T, IOException, TransactionConflictException> transactionOperation)
+      throws IOException {
+    int storeRetries = 0;
+
+    while (storeRetries < MAX_RETRIES) {
+      try {
+        return transactionOperation.apply();
+      } catch (ResourceNotFoundException e) {
+        throw e;
+      } catch (DatastoreException | IOException | TransactionConflictException e) {
+        if (e.getCause() instanceof ResourceNotFoundException) {
+          throw (ResourceNotFoundException) e.getCause();
+        }
+
+        storeRetries++;
+        if (storeRetries == MAX_RETRIES) {
+          throw new IOException("Maximum number of retries reached", e);
+        }
+
+        LOG.warn(String.format("Failed to read/write from/to Datastore (attempt #%d)", storeRetries), e);
+        try {
+          Thread.sleep(retryBaseDelay.toMillis());
+        } catch (InterruptedException e1) {
+          throw Throwables.propagate(e1);
+        }
+      }
+    }
+
+    throw new IOException("This should never happen");
+  }
+
+  private <T> T transactionWithRetriesUnlessConflict(
+      FnWithTwoExceptions<T, IOException, TransactionConflictException> transactionOperation)
+      throws IOException, TransactionConflictException {
+    int storeRetries = 0;
+
+    while (storeRetries < MAX_RETRIES) {
+      try {
+        return transactionOperation.apply();
+      } catch (ResourceNotFoundException e) {
+        throw e;
+      } catch (DatastoreException | IOException e) {
+        if (e.getCause() instanceof ResourceNotFoundException) {
+          throw (ResourceNotFoundException) e.getCause();
+        }
+
+        storeRetries++;
+        if (storeRetries == MAX_RETRIES) {
+          throw new IOException("Maximum number of retries reached", e);
         }
 
         LOG.warn(String.format("Failed to read/write from/to Datastore (attempt #%d)", storeRetries), e);
@@ -687,8 +752,8 @@ class DatastoreStorage {
     return this.<T>readOpt(entity, property).orElse(defaultValue);
   }
 
-  public <T, E extends Exception> T runInTransaction(TransactionFunction<T, E> f)
-      throws TransactionException {
+  public <T> T runInTransaction(TransactionFunction<T> f)
+      throws IOException, TransactionConflictException {
     try {
       return datastore.runInTransaction(tx -> {
         final DatastoreTransactionalStorage transactionalStorage =
@@ -696,8 +761,11 @@ class DatastoreStorage {
         return f.apply(transactionalStorage);
       });
     } catch (DatastoreException e) {
-      final boolean conflict = e.getCode() == 10;
-      throw new TransactionException(conflict, e);
+      if (e.getCode() == 10) {
+        throw new TransactionConflictException(e);
+      } else {
+        throw new IOException(e);
+      }
     }
   }
 }

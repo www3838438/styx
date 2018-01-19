@@ -259,7 +259,14 @@ public interface Storage {
   /**
    * Run a function in a transaction that is committed if successful. Any exception thrown by the
    * passed in function will cause the transaction to be rolled back.
+   *
+   * @param f The function to execute in a transaction, whose transactional operations are handled
+   *          by the provided {@link TransactionalStorage}
+   * @throws IOException Signals that the transaction failed for a problem in Storage or because of
+   *                     an exception from the provided {@link TransactionFunction}
+   * @throws TransactionConflictException Signals that the transaction failed due to concurrent
+   *                                      access on the Storage entities
    */
-  <T, E extends Exception> T runInTransaction(TransactionFunction<T, E> f)
-      throws IOException, E;
+  <T> T runInTransaction(TransactionFunction<T> f)
+      throws IOException, TransactionConflictException;
 }
