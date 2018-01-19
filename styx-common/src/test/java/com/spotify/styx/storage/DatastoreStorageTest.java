@@ -541,6 +541,8 @@ public class DatastoreStorageTest {
       storage.runInTransaction(transactionFunction);
       fail("Expected exception!");
     } catch (FooException e) {
+      // Verify that we can throw a user defined checked exception type inside the transaction
+      // body and catch it
       assertThat(e, is(expectedException));
     }
 

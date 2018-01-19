@@ -71,7 +71,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -698,7 +697,7 @@ class DatastoreStorage {
   }
 
   public <T, E extends Exception> T runInTransaction(TransactionFunction<T, E> f)
-      throws TransactionException, E {
+      throws IOException, E {
     final TransactionalStorage tx = newTransaction();
     try {
       final T value = f.apply(tx);

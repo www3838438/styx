@@ -267,5 +267,6 @@ public interface Storage {
    * Run a function in a transaction that is committed if successful. Any exception thrown by the
    * passed in function will cause the transaction to be rolled back.
    */
-  <T, E extends Exception> T runInTransaction(TransactionFunction<T, E> f) throws E;
+  <T, E extends Exception> T runInTransaction(TransactionFunction<T, E> f)
+      throws IOException, E;
 }
