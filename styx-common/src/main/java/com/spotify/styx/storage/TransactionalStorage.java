@@ -30,10 +30,6 @@ import java.io.IOException;
  *
  * <p>Use the {@link Storage#runInTransaction(TransactionFunction)} method for automatic
  * commit/rollback handling.
- *
- * <p>For manual transaction handling, create a new {@link TransactionalStorage} using
- * {@link Storage#newTransaction()} and call {@link TransactionalStorage#commit()} after the desired storage
- * operation calls.
  */
 public interface TransactionalStorage {
 

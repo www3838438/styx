@@ -713,7 +713,7 @@ class DatastoreStorage {
     }
   }
 
-  public TransactionalStorage newTransaction() throws TransactionException {
+  private TransactionalStorage newTransaction() throws TransactionException {
     final Transaction transaction;
     try {
       transaction = datastore.newTransaction();

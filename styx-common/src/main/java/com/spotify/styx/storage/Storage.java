@@ -257,13 +257,6 @@ public interface Storage {
   void storeBackfill(Backfill backfill) throws IOException;
 
   /**
-   * Get a new transaction object that can execute multiple storage operations in a transaction.
-   *
-   * @return the {@link TransactionalStorage} instance
-   */
-  TransactionalStorage newTransaction() throws IOException;
-
-  /**
    * Run a function in a transaction that is committed if successful. Any exception thrown by the
    * passed in function will cause the transaction to be rolled back.
    */
