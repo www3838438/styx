@@ -51,8 +51,9 @@ public class StorageTest {
             return "foo";
         }
       });
-      fail(); // Satisfy static analysis rule requiring assert or fail in junit tests
     } catch (IOException | FooException ignore) {
+      fail(); // Satisfy static analysis rule requiring assert or fail in junit tests
+      
       // The throws declaration of the above lambda should be inferred to FooException, not the
       // generic Exception. This allows a try/catch wrapping the runInTransaction call to catch
       // a user defined checked exception type to communicate a business logic exception without
