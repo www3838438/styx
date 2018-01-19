@@ -43,7 +43,6 @@ public class DatastoreTransactionalStorageTest {
   private static Datastore datastore;
 
   @Mock DatastoreStorage storage;
-  @Mock Transaction transaction;
 
   @BeforeClass
   public static void setUpClass() throws Exception {
