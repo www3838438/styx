@@ -26,7 +26,6 @@ import static com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -64,7 +63,7 @@ public final class Json {
       .registerModule(new AutoMatterModule());
 
   public static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory())
-      .setPropertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE)
+      .setPropertyNamingStrategy(SNAKE_CASE)
       .enable(ACCEPT_SINGLE_VALUE_AS_ARRAY)
       .disable(WRITE_DATES_AS_TIMESTAMPS)
       .registerModule(ADT_MODULE)

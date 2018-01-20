@@ -32,7 +32,6 @@ import com.spotify.styx.model.Schedule;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
@@ -104,12 +103,12 @@ public final class ParameterUtil {
   public static Instant parseDate(String date) {
     return Instant.from(LocalDate.from(
         DateTimeFormatter.ISO_LOCAL_DATE.parse(date))
-                            .atStartOfDay(ZoneOffset.UTC));
+                            .atStartOfDay(UTC));
   }
 
   public static Instant parseDateHour(String dateHour) {
     return Instant.from(LocalDateTime.from(
-        ISO_LOCAL_DATE_HOUR.parse(dateHour)).atOffset(ZoneOffset.UTC));
+        ISO_LOCAL_DATE_HOUR.parse(dateHour)).atOffset(UTC));
   }
 
   public static String toParameter(Schedule schedule, Instant instant) {

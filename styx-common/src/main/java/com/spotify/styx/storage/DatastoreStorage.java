@@ -254,6 +254,7 @@ class DatastoreStorage {
   }
 
   public Map<Workflow, TriggerInstantSpec> workflowsWithNextNaturalTrigger() throws IOException {
+
     final Map<Workflow, TriggerInstantSpec> map = Maps.newHashMap();
     final EntityQuery query =
         Query.newEntityQueryBuilder().setKind(KIND_WORKFLOW).build();

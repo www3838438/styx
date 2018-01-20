@@ -40,11 +40,6 @@ public class TypeWrapperModule extends SimpleModule {
     super("AdtModule");
   }
 
-  @Override
-  public void setupModule(SetupContext context) {
-    super.setupModule(context);
-  }
-
   public <T, W> TypeWrapperModule setupWrapping(
       Class<T> valueClass,
       Class<W> wrapperClass,

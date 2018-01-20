@@ -46,7 +46,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import okio.ByteString;
@@ -220,25 +219,23 @@ public final class Middlewares {
 
   // todo: make use of following middleware where we need to use the auth context in route handlers
 
-  interface Authenticated<T> extends Function<AuthContext, T> {}
-  interface Requested<T> extends Function<RequestContext, T> {}
-
-  private static <T> Middleware<Requested<Authenticated<T>>, AsyncHandler<Response<ByteString>>> authed() {
-    return ar -> jsonAsync().apply(requestContext -> {
-      final T payload = ar
-          .apply(requestContext)
-          .apply(auth(requestContext));
-      return completedFuture(Response.forPayload(payload));
-    });
-  }
+  //  interface Authenticated<T> extends Function<AuthContext, T> {}
+  //  interface Requested<T> extends Function<RequestContext, T> {}
+  //
+  //  private static <T> Middleware<Requested<Authenticated<T>>, AsyncHandler<Response<ByteString>>> authed() {
+  //    return ar -> jsonAsync().apply(requestContext -> {
+  //      final T payload = ar
+  //          .apply(requestContext)
+  //          .apply(auth(requestContext));
+  //      return completedFuture(Response.forPayload(payload));
+  //    });
+  //  }
 
   public static <T> Middleware<AsyncHandler<Response<T>>, AsyncHandler<Response<T>>> authValidator() {
     return h -> rc -> {
-      if (!"GET".equals(rc.request().method())) {
-        if (!auth(rc).user().isPresent()) {
-          return completedFuture(
-              Response.forStatus(Status.UNAUTHORIZED.withReasonPhrase("Unauthorized access")));
-        }
+      if (!"GET".equals(rc.request().method()) && !auth(rc).user().isPresent()) {
+        return completedFuture(
+            Response.forStatus(Status.UNAUTHORIZED.withReasonPhrase("Unauthorized access")));
       }
 
       return h.invoke(rc);

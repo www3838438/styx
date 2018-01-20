@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  name="Android Application Rules"
+  xmlns="http://pmd.sf.net/ruleset/1.0.0"
+  xsi:noNamespaceSchemaLocation="http://pmd.sf.net/ruleset_xml_schema.xsd"
+  xsi:schemaLocation="http://pmd.sf.net/ruleset/1.0.0 http://pmd.sf.net/ruleset_xml_schema.xsd">
+
+  <rule ref="rulesets/java/basic.xml"/>
+  <rule ref="rulesets/java/empty.xml"/>
+  <rule ref="rulesets/java/imports.xml">
+    <exclude name="TooManyStaticImports"/>
+  </rule>
+  <rule ref="rulesets/java/unnecessary.xml">
+    <exclude name="UselessParentheses"/>
+  </rule>
+  <rule ref="rulesets/java/unusedcode.xml"/>
+
+
+  <!--<rule ref="rulesets/clone.xml"/>-->
+  <!--<rule ref="rulesets/finalizers.xml"/>-->
+  <!--<rule ref="rulesets/imports.xml"/>-->
+  <!--<rule ref="rulesets/logging-java.xml"/>-->
+  <!--<rule ref="rulesets/unnecessary.xml">-->
+    <!--<exclude name="UselessParentheses"/>-->
+  <!--</rule>-->
+
+</ruleset>
