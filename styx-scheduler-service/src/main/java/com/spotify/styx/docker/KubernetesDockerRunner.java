@@ -562,9 +562,9 @@ class KubernetesDockerRunner implements DockerRunner {
         .getOrDefault(KubernetesDockerRunner.STYX_WORKFLOW_INSTANCE_ANNOTATION, "N/A");
     final String status = readStatus(pod);
 
-    LOG.info("{}Pod event for {} ({}) at resource version {}, action: {}, workflow instance: {}, status: {}",
-             polled ? "Polled: " : "", podName, pod.getMetadata().getUid(), resourceVersion, action, workflowInstance,
-             status);
+    LOG.debug("{}Pod event for {} ({}) at resource version {}, action: {}, workflow instance: {}, status: {}",
+              polled ? "Polled: " : "", podName, pod.getMetadata().getUid(), resourceVersion, action, workflowInstance,
+              status);
   }
 
   private String readStatus(Pod pod) {

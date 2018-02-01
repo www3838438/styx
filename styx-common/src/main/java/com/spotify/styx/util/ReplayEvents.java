@@ -171,7 +171,7 @@ public final class ReplayEvents {
   public static OutputHandler transitionLogger(String prefix) {
     return (state) -> {
       final String instanceKey = state.workflowInstance().toKey();
-      LOG.info(
+      LOG.debug(
           "{}{} transition -> {} {}",
           prefix, instanceKey, state.state().name().toLowerCase(), stateInfo(state));
     };
