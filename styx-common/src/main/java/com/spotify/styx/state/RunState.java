@@ -87,6 +87,7 @@ public abstract class RunState {
   public abstract State state();
   public abstract long timestamp();
   public abstract StateData data();
+  public abstract long counter();
 
   public static RunState fresh(
       WorkflowInstance workflowInstance,
@@ -99,17 +100,22 @@ public abstract class RunState {
   }
 
   public RunState transition(Event event) {
-    return event.accept(visitor);
+    return event.accept(visitor).increaseCounter();
   }
 
   private RunState state(State state, StateData newStateData) {
     return new AutoValue_RunState(
-        workflowInstance(), state, timestamp(), newStateData);
+        workflowInstance(), state, timestamp(), newStateData, counter());
   }
 
   private RunState state(State state) {
     return new AutoValue_RunState(
-        workflowInstance(), state, timestamp(), data());
+        workflowInstance(), state, timestamp(), data(), counter());
+  }
+
+  public RunState increaseCounter() {
+    return new AutoValue_RunState(
+        workflowInstance(), state(), timestamp(), data(), counter() + 1);
   }
 
   private class TransitionVisitor implements EventVisitor<RunState> {
@@ -409,7 +415,7 @@ public abstract class RunState {
       State state,
       StateData stateData) {
     return new AutoValue_RunState(
-        workflowInstance, state, currentTimeMillis(), stateData);
+        workflowInstance, state, currentTimeMillis(), stateData, -1);
   }
 
   public static RunState create(
@@ -418,6 +424,16 @@ public abstract class RunState {
       StateData stateData,
       Instant timestamp) {
     return new AutoValue_RunState(
-        workflowInstance, state, timestamp.toEpochMilli(), stateData);
+        workflowInstance, state, timestamp.toEpochMilli(), stateData, -1);
+  }
+
+  public static RunState create(
+      WorkflowInstance workflowInstance,
+      State state,
+      StateData stateData,
+      Instant timestamp,
+      long counter) {
+    return new AutoValue_RunState(
+        workflowInstance, state, timestamp.toEpochMilli(), stateData, counter);
   }
 }

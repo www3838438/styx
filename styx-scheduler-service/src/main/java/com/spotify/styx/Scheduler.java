@@ -134,7 +134,8 @@ public class Scheduler {
             resources.put(GLOBAL_RESOURCE_ID,
                           Resource.create(GLOBAL_RESOURCE_ID, concurrency)));
 
-    final List<InstanceState> activeStates = stateManager.activeStates().entrySet().stream()
+    final List<InstanceState> activeStates;
+    activeStates = stateManager.activeStates().entrySet().stream()
         .map(entry -> InstanceState.create(entry.getKey(), entry.getValue()))
         .collect(toList());
 
