@@ -347,7 +347,7 @@ public class DatastoreStorageTest {
   public void testFullPersistentStatePersistence() throws Exception {
     storage.writeActiveState(WORKFLOW_INSTANCE, FULL_PERSISTENT_STATE);
     final RunState read = storage
-        .activeStates(WORKFLOW_INSTANCE.workflowId().componentId())
+        .readActiveStates(WORKFLOW_INSTANCE.workflowId().componentId())
         .get(WORKFLOW_INSTANCE);
     assertThat(read, is(FULL_PERSISTENT_STATE));
   }
@@ -368,7 +368,7 @@ public class DatastoreStorageTest {
     storage.writeActiveState(WORKFLOW_INSTANCE1, PERSISTENT_STATE1);
     storage.writeActiveState(WORKFLOW_INSTANCE2, PERSISTENT_STATE2);
 
-    final Map<WorkflowInstance, RunState> activeStates = storage.allActiveStates();
+    final Map<WorkflowInstance, RunState> activeStates = storage.readActiveStates();
     assertThat(activeStates, is(ImmutableMap.of(
         WORKFLOW_INSTANCE1, PERSISTENT_STATE1,
         WORKFLOW_INSTANCE2, PERSISTENT_STATE2)));
@@ -382,7 +382,7 @@ public class DatastoreStorageTest {
     assertThat(entitiesOfKind(DatastoreStorage.KIND_ACTIVE_WORKFLOW_INSTANCE), hasSize(2));
 
     final Map<WorkflowInstance, RunState> activeStates =
-        storage.activeStates(WORKFLOW_ID1.componentId());
+        storage.readActiveStates(WORKFLOW_ID1.componentId());
 
     assertThat(activeStates, is(ImmutableMap.of(WORKFLOW_INSTANCE2, PERSISTENT_STATE2)));
   }

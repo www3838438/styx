@@ -302,8 +302,7 @@ public class InMemStorage implements Storage {
   }
 
   @Override
-  public void writeActiveState(WorkflowInstance workflowInstance,
-      RunState state) {
+  public void writeActiveState(WorkflowInstance workflowInstance, RunState state) {
     activeStatesMap.put(workflowInstance, state);
   }
 
@@ -313,12 +312,12 @@ public class InMemStorage implements Storage {
   }
 
   @Override
-  public Map<WorkflowInstance, RunState> readActiveWorkflowInstances() throws IOException {
+  public Map<WorkflowInstance, RunState> readActiveStates() throws IOException {
     return activeStatesMap;
   }
 
   @Override
-  public Map<WorkflowInstance, RunState> readActiveWorkflowInstances(String componentId)
+  public Map<WorkflowInstance, RunState> readActiveStates(String componentId)
       throws IOException {
     return activeStatesMap.entrySet().stream()
         .filter((entry) -> componentId.equals(entry.getKey().workflowId().componentId()))
@@ -326,7 +325,7 @@ public class InMemStorage implements Storage {
   }
 
   @Override
-  public Optional<RunState> readActiveWorkflowInstance(WorkflowInstance workflowInstance) {
+  public Optional<RunState> readActiveState(WorkflowInstance workflowInstance) {
     return Optional.ofNullable(activeStatesMap.get(workflowInstance));
   }
 }

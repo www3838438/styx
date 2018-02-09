@@ -52,11 +52,12 @@ import java.util.Optional;
 @AutoValue
 public abstract class RunState {
 
-  public static final int SUCCESS_EXIT_CODE = 0;
+  private static final int SUCCESS_EXIT_CODE = 0;
   public static final int MISSING_DEPS_EXIT_CODE = 20;
 
-  public static final double FAILURE_COST = 1.0;
-  public static final double MISSING_DEPS_COST = 0.1;
+  private static final double FAILURE_COST = 1.0;
+  private static final double MISSING_DEPS_COST = 0.1;
+  private static final long NO_EVENTS_PROCESSED = -1L;
 
   private final EventVisitor<RunState> visitor = new TransitionVisitor();
 
@@ -415,7 +416,7 @@ public abstract class RunState {
       State state,
       StateData stateData) {
     return new AutoValue_RunState(
-        workflowInstance, state, currentTimeMillis(), stateData, -1);
+        workflowInstance, state, currentTimeMillis(), stateData, NO_EVENTS_PROCESSED);
   }
 
   public static RunState create(
@@ -424,7 +425,7 @@ public abstract class RunState {
       StateData stateData,
       Instant timestamp) {
     return new AutoValue_RunState(
-        workflowInstance, state, timestamp.toEpochMilli(), stateData, -1);
+        workflowInstance, state, timestamp.toEpochMilli(), stateData, NO_EVENTS_PROCESSED);
   }
 
   public static RunState create(

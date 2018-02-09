@@ -138,9 +138,9 @@ public class DatastoreStorageTransactionTest {
   @Test
   public void insertActiveStateShouldFailIfAlreadyExists() throws Exception {
     final DatastoreStorage storage = new DatastoreStorage(datastore, Duration.ZERO);
-    storage.runInTransaction(tx -> tx.insertActiveState(WORKFLOW_INSTANCE1, PERSISTENT_STATE1));
+    storage.runInTransaction(tx -> tx.writeActiveState(WORKFLOW_INSTANCE1, PERSISTENT_STATE1));
     try {
-      storage.runInTransaction(tx -> tx.insertActiveState(WORKFLOW_INSTANCE1, PERSISTENT_STATE1));
+      storage.runInTransaction(tx -> tx.writeActiveState(WORKFLOW_INSTANCE1, PERSISTENT_STATE1));
       fail("Expected exception!");
     } catch (TransactionException e) {
       assertThat(e.isAlreadyExists(), is(true));

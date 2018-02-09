@@ -113,7 +113,7 @@ public class QueuedStateManager implements StateManager {
           if (!workflow.isPresent()) {
             throw new IllegalArgumentException("Workflow not found: " + workflowInstance.workflowId().toKey());
           }
-          return tx.insertActiveState(workflowInstance, runState);
+          return tx.writeActiveState(workflowInstance, runState);
         });
       } catch (TransactionException e) {
         if (e.isAlreadyExists()) {
@@ -161,7 +161,7 @@ public class QueuedStateManager implements StateManager {
             return storage.runInTransaction(tx -> {
 
               // Read active state from datastore
-              final Optional<RunState> runStateOptional = tx.activeState(event.workflowInstance());
+              final Optional<RunState> runStateOptional = tx.readActiveState(event.workflowInstance());
               if (!runStateOptional.isPresent()) {
                 String message = "Received event for unknown workflow instance: " + event;
                 LOG.warn(message);
@@ -223,7 +223,7 @@ public class QueuedStateManager implements StateManager {
   @Override
   public Map<WorkflowInstance, RunState> activeStates() {
     try {
-      return storage.readActiveWorkflowInstances();
+      return storage.readActiveStates();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -233,7 +233,7 @@ public class QueuedStateManager implements StateManager {
   public RunState get(WorkflowInstance workflowInstance) {
     final Optional<RunState> runStateOptional;
     try {
-      runStateOptional = storage.readActiveWorkflowInstance(workflowInstance);
+      runStateOptional = storage.readActiveState(workflowInstance);
     } catch (IOException e) {
       throw new RuntimeException(e);
     }

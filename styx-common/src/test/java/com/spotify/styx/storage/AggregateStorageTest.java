@@ -58,25 +58,25 @@ public class AggregateStorageTest {
   public void readActiveWorkflowInstances() throws Exception {
     final Map<WorkflowInstance, RunState> activeStates =
         ImmutableMap.of(workflowInstance, persistentState);
-    when(datastore.allActiveStates()).thenReturn(activeStates);
-    assertThat(sut.readActiveWorkflowInstances(), is(activeStates));
-    verify(datastore).allActiveStates();
+    when(datastore.readActiveStates()).thenReturn(activeStates);
+    assertThat(sut.readActiveStates(), is(activeStates));
+    verify(datastore).readActiveStates();
   }
 
   @Test
   public void readActiveWorkflowInstance() throws Exception {
-    when(datastore.activeState(workflowInstance)).thenReturn(Optional.of(persistentState));
-    assertThat(sut.readActiveWorkflowInstance(workflowInstance), is(Optional.of(persistentState)));
-    verify(datastore).activeState(workflowInstance);
+    when(datastore.readActiveState(workflowInstance)).thenReturn(Optional.of(persistentState));
+    assertThat(sut.readActiveState(workflowInstance), is(Optional.of(persistentState)));
+    verify(datastore).readActiveState(workflowInstance);
   }
 
   @Test
   public void readActiveWorkflowInstancesForComponent() throws Exception {
     final Map<WorkflowInstance, RunState> activeStates =
         ImmutableMap.of(workflowInstance, persistentState);
-    when(datastore.activeStates(COMPONENT)).thenReturn(activeStates);
-    assertThat(sut.readActiveWorkflowInstances(COMPONENT), is(activeStates));
-    verify(datastore).activeStates(COMPONENT);
+    when(datastore.readActiveStates(COMPONENT)).thenReturn(activeStates);
+    assertThat(sut.readActiveStates(COMPONENT), is(activeStates));
+    verify(datastore).readActiveStates(COMPONENT);
   }
 
   @Test
