@@ -20,8 +20,6 @@
 
 package com.spotify.styx.util;
 
-import static java.lang.String.format;
-
 import com.google.common.base.Throwables;
 import com.spotify.styx.model.SequenceEvent;
 import com.spotify.styx.model.WorkflowInstance;
@@ -50,10 +48,10 @@ public final class ReplayEvents {
   public static Map<RunState, Long> replayActiveStates(
       Map<WorkflowInstance, PersistentWorkflowInstanceState> instances,
       Storage storage,
-      boolean printLogs) throws IOException {
+      boolean printLogs) {
     LOG.info("Replaying active states");
 
-    final OutputHandler replayLogger = printLogs ? transitionLogger("  ") : OutputHandler.NOOP;
+    final OutputHandler replayLogger = printLogs ? new TransitionLogger("  ") : OutputHandler.NOOP;
 
     return instances.entrySet().parallelStream().map(entry -> {
       final WorkflowInstance workflowInstance = entry.getKey();
@@ -166,43 +164,6 @@ public final class ReplayEvents {
       }
     }
     return backfillFound ? Optional.of(restoredState) : Optional.empty();
-  }
-
-  public static OutputHandler transitionLogger(String prefix) {
-    return (state) -> {
-      final String instanceKey = state.workflowInstance().toKey();
-      LOG.debug(
-          "{}{} transition -> {} {}",
-          prefix, instanceKey, state.state().name().toLowerCase(), stateInfo(state));
-    };
-  }
-
-  private static String stateInfo(RunState state) {
-    switch (state.state()) {
-      case NEW:
-      case PREPARE:
-      case ERROR:
-      case DONE:
-        return format("tries:%d", state.data().tries());
-
-      case SUBMITTED:
-      case RUNNING:
-      case FAILED:
-        return format("tries:%d execId:%s",
-            state.data().tries(), state.data().executionId());
-
-      case TERMINATED:
-        return format("tries:%d execId:%s exitCode:%s",
-            state.data().tries(), state.data().executionId(), state.data().lastExit().map(
-                String::valueOf).orElse("-"));
-
-      case QUEUED:
-        return format("tries:%d delayMs:%s",
-            state.data().tries(), state.data().retryDelayMillis());
-
-      default:
-        return "";
-    }
   }
 
   private static final class SettableTime implements Time {
