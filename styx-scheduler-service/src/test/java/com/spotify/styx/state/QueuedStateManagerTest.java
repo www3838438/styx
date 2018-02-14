@@ -54,6 +54,7 @@ import com.spotify.styx.storage.TransactionFunction;
 import com.spotify.styx.testdata.TestData;
 import com.spotify.styx.util.IsClosedException;
 import com.spotify.styx.util.Time;
+import eu.javaspecialists.tjsn.concurrency.stripedexecutor.StripedExecutorService;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Map;
@@ -91,7 +92,7 @@ public class QueuedStateManagerTest {
   private static final Trigger TRIGGER1 = Trigger.unknown("trig1");
   private static final BiConsumer<SequenceEvent, RunState> eventConsumer = (e, s) -> {};
 
-  private final ExecutorService eventTransitionExecutor = Executors.newFixedThreadPool(16);
+  private final StripedExecutorService eventTransitionExecutor = new StripedExecutorService(16);
   private final ExecutorService eventConsumerExecutor = Executors.newSingleThreadExecutor();
 
 
@@ -271,7 +272,7 @@ public class QueuedStateManagerTest {
         eventConsumerExecutor, outputHandler));
     when(storage.getLatestStoredCounter(any())).thenReturn(Optional.empty());
     when(transaction.workflow(INSTANCE.workflowId())).thenReturn(Optional.empty());
-    when(stateManager.receive(any())).thenThrow(new IsClosedException());
+    doThrow(new IsClosedException()).when(stateManager).receive(any());
 
     try {
       stateManager.trigger(INSTANCE, TRIGGER1)
@@ -291,7 +292,7 @@ public class QueuedStateManagerTest {
     when(storage.getLatestStoredCounter(any())).thenReturn(Optional.empty());
     doThrow(new IOException()).when(storage).deleteActiveState(any());
     when(transaction.workflow(INSTANCE.workflowId())).thenReturn(Optional.empty());
-    when(stateManager.receive(any())).thenThrow(new IsClosedException());
+    doThrow(new IsClosedException()).when(stateManager).receive(any());
 
     try {
       stateManager.trigger(INSTANCE, TRIGGER1)
@@ -393,6 +394,29 @@ public class QueuedStateManagerTest {
     verify(storage).writeEvent(SequenceEvent.create(event, 18, NOW.toEpochMilli()));
   }
 
+  @Test
+  public void shouldHaveZeroQueuedEvent() throws Exception {
+    when(transaction.activeState(INSTANCE)).thenReturn(
+        Optional.of(PersistentWorkflowInstanceState
+                        .builder()
+                        .counter(17)
+                        .timestamp(NOW.minusMillis(1))
+                        .state(State.TERMINATED)
+                        .data(StateData.zero())
+                        .build()));
+
+    assertThat(stateManager.queuedEvents(), is(0L));
+
+    Event event = Event.success(INSTANCE);
+    stateManager.receive(event)
+        .toCompletableFuture().get(1, MINUTES);
+
+    assertThat(stateManager.queuedEvents(), is(0L));
+
+    verify(transaction).deleteActiveState(INSTANCE);
+
+    verify(storage).writeEvent(SequenceEvent.create(event, 18, NOW.toEpochMilli()));
+  }
 
   @Test
   public void shouldWriteActiveStateOnEvent() throws Exception {
@@ -522,6 +546,17 @@ public class QueuedStateManagerTest {
     }
   }
 
-  class FooException extends Exception {
+  @Test
+  public void shouldThrowRuntimeException() throws Exception {
+    final IOException exception = new IOException();
+    when(storage.getLatestStoredCounter(any())).thenReturn(Optional.empty());
+    doThrow(exception).when(storage).runInTransaction(any());
+    CompletableFuture<Void> f = stateManager.receive(Event.dequeue(INSTANCE)).toCompletableFuture();
+    try {
+      f.get(1, MINUTES);
+      fail();
+    } catch (ExecutionException e) {
+      assertThat(Throwables.getRootCause(e), is(exception));
+    }
   }
 }
