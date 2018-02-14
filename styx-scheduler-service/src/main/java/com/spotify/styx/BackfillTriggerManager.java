@@ -20,6 +20,7 @@
 
 package com.spotify.styx;
 
+import static com.spotify.styx.util.GuardedRunnable.guard;
 import static com.spotify.styx.util.TimeUtil.nextInstant;
 import static java.util.stream.Collectors.counting;
 import static java.util.stream.Collectors.groupingBy;
@@ -75,7 +76,7 @@ public class BackfillTriggerManager {
     }
 
     final Map<String, Long> backfillStates = getBackfillStates();
-    backfills.forEach(backfill -> triggerBackfill(backfill, backfillStates));
+    backfills.forEach(backfill -> guard(() -> triggerBackfill(backfill, backfillStates)).run());
   }
 
   private void triggerBackfill(Backfill backfill, Map<String, Long> backfillStates) {
@@ -103,15 +104,13 @@ public class BackfillTriggerManager {
         // Wait for the trigger execution to complete before proceeding to the next partition
         processed.get();
       } catch (AlreadyInitializedException e) {
-        LOG.warn("tried to trigger backfill for already active state [{}]: {}",
-                 partition, backfill);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new RuntimeException(e);
+        LOG.warn("tried to trigger backfill for already active state [{}]: {}", partition, backfill);
       } catch (ExecutionException e) {
-        LOG.error("failed to trigger backfill for state [{}]: {}",
-                  partition, backfill);
-        throw new RuntimeException(e);
+        LOG.warn("failed to trigger backfill for state [{}]: {}", partition, backfill, e);
+        return;
+      } catch (Throwable e) {
+        LOG.warn("backfill triggering threw exception for state [{}]: {}", partition, backfill, e);
+        return;
       }
 
       partition = nextInstant(partition, backfill.schedule());
